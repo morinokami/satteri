@@ -1110,9 +1110,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     let is_valid_seq = c != b'~'
                         || count == 2
                         || (count == 1
-                            && (self
-                                .options
-                                .contains(Options::ENABLE_STRIKETHROUGH)
+                            && (self.options.contains(Options::ENABLE_STRIKETHROUGH)
                                 || self.options.contains(Options::ENABLE_SUBSCRIPT)));
 
                     if (can_open || can_close) && is_valid_seq {
@@ -1594,8 +1592,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 // there is no ambiguity with deep indentation.
                 line_start.scan_all_space();
                 let close_ix = ix + line_start.bytes_scanned();
-                if let Some(n) =
-                    scan_closing_code_fence(&bytes[close_ix..], fence_ch, n_fence_char)
+                if let Some(n) = scan_closing_code_fence(&bytes[close_ix..], fence_ch, n_fence_char)
                 {
                     ix = close_ix + n;
                     self.pop(ix);

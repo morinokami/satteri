@@ -1185,10 +1185,20 @@ fn tab_indented_code_fence_in_list() {
     let input = "5. item:\n\n\t\t```ts\n\tcontent {a: 1}\n\t\t```\n";
     let events = mdx_events(input);
     let has_code_block = has(&events, |e| matches!(e, Event::Start(Tag::CodeBlock(_))));
-    assert!(has_code_block, "Tab-indented code fence in list not detected: {:?}", events);
+    assert!(
+        has_code_block,
+        "Tab-indented code fence in list not detected: {:?}",
+        events
+    );
     // Should NOT have MDX expression (the {a: 1} is inside a code block)
-    let has_expr = has(&events, |e| matches!(e, Event::MdxFlowExpression(_) | Event::MdxTextExpression(_)));
-    assert!(!has_expr, "Content inside code fence incorrectly parsed as MDX expression: {:?}", events);
+    let has_expr = has(&events, |e| {
+        matches!(e, Event::MdxFlowExpression(_) | Event::MdxTextExpression(_))
+    });
+    assert!(
+        !has_expr,
+        "Content inside code fence incorrectly parsed as MDX expression: {:?}",
+        events
+    );
 }
 
 #[test]
@@ -1197,7 +1207,11 @@ fn tab_indented_code_fence_standalone() {
     let input = "\t\t```ts\ncontent {a: 1}\n\t\t```\n";
     let events = mdx_events(input);
     let has_code_block = has(&events, |e| matches!(e, Event::Start(Tag::CodeBlock(_))));
-    assert!(has_code_block, "Tab-indented standalone code fence not detected: {:?}", events);
+    assert!(
+        has_code_block,
+        "Tab-indented standalone code fence not detected: {:?}",
+        events
+    );
 }
 
 #[test]
@@ -1205,7 +1219,11 @@ fn expression_with_double_quote_string() {
     let events = mdx_events(r#"{"hello"}"#);
     // At the start of a line, this is a flow expression (not text)
     let has_expr = has(&events, |e| matches!(e, Event::MdxFlowExpression(_)));
-    assert!(has_expr, "Double-quote string expression not detected: {:?}", events);
+    assert!(
+        has_expr,
+        "Double-quote string expression not detected: {:?}",
+        events
+    );
     for e in &events {
         if let Event::MdxFlowExpression(content) = e {
             assert_eq!(content.as_ref(), r#""hello""#, "Wrong expression content");

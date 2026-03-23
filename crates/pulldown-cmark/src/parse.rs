@@ -467,11 +467,12 @@ impl<'input> ParserInner<'input> {
 
                         // In MDX, `<!` is not valid (no HTML comments).
                         if next_byte == Some(b'!') {
-                            self.mdx_errors.push((start, format!(
+                            self.mdx_errors.push((
+                                start,
                                 "Unexpected character `!` (U+0021) before name, expected a \
                                  character that can start a name, such as a letter, `$`, or `_` \
-                                 (note: to create a comment in MDX, use `{{/* text */}}`)"
-                            )));
+                                 (note: to create a comment in MDX, use `{/* text */}`)".to_string(),
+                            ));
                             self.tree[cur_ix].item.body = ItemBody::Text {
                                 backslash_escaped: false,
                             };
@@ -502,10 +503,11 @@ impl<'input> ParserInner<'input> {
                         // In MDX, `<` followed by a letter, `/`, or `>` must be
                         // valid JSX.  If the JSX scan failed, record an error.
                         if matches!(next_byte, Some(b'a'..=b'z' | b'A'..=b'Z' | b'/' | b'>')) {
-                            self.mdx_errors.push((start, format!(
+                            self.mdx_errors.push((
+                                start,
                                 "Unexpected character after `<`, expected a valid JSX tag \
-                                 (note: to create a link in MDX, use `[text](url)`)"
-                            )));
+                                 (note: to create a link in MDX, use `[text](url)`)".to_string(),
+                            ));
                         }
 
                         self.tree[cur_ix].item.body = ItemBody::Text {

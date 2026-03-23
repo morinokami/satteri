@@ -4,7 +4,7 @@ use parser::{parse, ParseOptions};
 
 #[test]
 fn full_pipeline_heading_to_html() {
-    let arena = parse("# Hello world\n", &ParseOptions::default());
+    let (arena, _) = parse("# Hello world\n", &ParseOptions::default());
     let html = tryckeri_hast::mdast_to_html(&arena);
     assert!(html.contains("<h1>"), "expected <h1>, got: {html}");
     assert!(html.contains("Hello world"), "expected text, got: {html}");
@@ -12,7 +12,7 @@ fn full_pipeline_heading_to_html() {
 
 #[test]
 fn full_pipeline_paragraph_to_html() {
-    let arena = parse("hello **world**\n", &ParseOptions::default());
+    let (arena, _) = parse("hello **world**\n", &ParseOptions::default());
     let html = tryckeri_hast::mdast_to_html(&arena);
     assert!(html.contains("<p>"), "expected <p>, got: {html}");
     assert!(html.contains("<strong>"), "expected <strong>, got: {html}");
@@ -20,7 +20,7 @@ fn full_pipeline_paragraph_to_html() {
 
 #[test]
 fn full_pipeline_list_to_html() {
-    let arena = parse("- a\n- b\n- c\n", &ParseOptions::default());
+    let (arena, _) = parse("- a\n- b\n- c\n", &ParseOptions::default());
     let html = tryckeri_hast::mdast_to_html(&arena);
     assert!(html.contains("<ul>"), "expected <ul>, got: {html}");
     assert!(html.contains("<li>"), "expected <li>, got: {html}");
@@ -28,7 +28,7 @@ fn full_pipeline_list_to_html() {
 
 #[test]
 fn full_pipeline_code_block_to_html() {
-    let arena = parse("```rust\nfn main() {}\n```\n", &ParseOptions::default());
+    let (arena, _) = parse("```rust\nfn main() {}\n```\n", &ParseOptions::default());
     let html = tryckeri_hast::mdast_to_html(&arena);
     assert!(html.contains("<pre>"), "expected <pre>, got: {html}");
     assert!(html.contains("<code"), "expected <code>, got: {html}");
@@ -40,7 +40,7 @@ fn full_pipeline_code_block_to_html() {
 
 #[test]
 fn full_pipeline_link_to_html() {
-    let arena = parse("[click](https://example.com)\n", &ParseOptions::default());
+    let (arena, _) = parse("[click](https://example.com)\n", &ParseOptions::default());
     let html = tryckeri_hast::mdast_to_html(&arena);
     assert!(
         html.contains("href=\"https://example.com\""),
@@ -51,7 +51,7 @@ fn full_pipeline_link_to_html() {
 
 #[test]
 fn full_pipeline_image_to_html() {
-    let arena = parse("![alt](img.png)\n", &ParseOptions::default());
+    let (arena, _) = parse("![alt](img.png)\n", &ParseOptions::default());
     let html = tryckeri_hast::mdast_to_html(&arena);
     assert!(
         html.contains("src=\"img.png\""),
@@ -61,7 +61,7 @@ fn full_pipeline_image_to_html() {
 
 #[test]
 fn full_pipeline_blockquote_to_html() {
-    let arena = parse("> quoted text\n", &ParseOptions::default());
+    let (arena, _) = parse("> quoted text\n", &ParseOptions::default());
     let html = tryckeri_hast::mdast_to_html(&arena);
     assert!(
         html.contains("<blockquote>"),
@@ -71,7 +71,7 @@ fn full_pipeline_blockquote_to_html() {
 
 #[test]
 fn full_pipeline_html_block_to_html() {
-    let arena = parse(
+    let (arena, _) = parse(
         "<div>raw html</div>\n\nparagraph\n",
         &ParseOptions::default(),
     );
@@ -84,14 +84,14 @@ fn full_pipeline_html_block_to_html() {
 
 #[test]
 fn full_pipeline_inline_code_to_html() {
-    let arena = parse("use `code` here\n", &ParseOptions::default());
+    let (arena, _) = parse("use `code` here\n", &ParseOptions::default());
     let html = tryckeri_hast::mdast_to_html(&arena);
     assert!(html.contains("<code>"), "expected inline code, got: {html}");
 }
 
 #[test]
 fn full_pipeline_emphasis_to_html() {
-    let arena = parse("*em* and **strong**\n", &ParseOptions::default());
+    let (arena, _) = parse("*em* and **strong**\n", &ParseOptions::default());
     let html = tryckeri_hast::mdast_to_html(&arena);
     assert!(html.contains("<em>"), "expected em, got: {html}");
     assert!(html.contains("<strong>"), "expected strong, got: {html}");
@@ -99,21 +99,21 @@ fn full_pipeline_emphasis_to_html() {
 
 #[test]
 fn full_pipeline_thematic_break_to_html() {
-    let arena = parse("---\n", &ParseOptions::default());
+    let (arena, _) = parse("---\n", &ParseOptions::default());
     let html = tryckeri_hast::mdast_to_html(&arena);
     assert!(html.contains("<hr"), "expected hr, got: {html}");
 }
 
 #[test]
 fn full_pipeline_ordered_list_to_html() {
-    let arena = parse("1. first\n2. second\n", &ParseOptions::default());
+    let (arena, _) = parse("1. first\n2. second\n", &ParseOptions::default());
     let html = tryckeri_hast::mdast_to_html(&arena);
     assert!(html.contains("<ol>"), "expected <ol>, got: {html}");
 }
 
 #[test]
 fn full_pipeline_table_to_html() {
-    let arena = parse(
+    let (arena, _) = parse(
         "| a | b |\n|---|---|\n| 1 | 2 |\n",
         &ParseOptions::default(),
     );
@@ -123,7 +123,7 @@ fn full_pipeline_table_to_html() {
 
 #[test]
 fn full_pipeline_buffer_roundtrip_then_hast() {
-    let arena = parse("# Hello\n\nworld\n", &ParseOptions::default());
+    let (arena, _) = parse("# Hello\n\nworld\n", &ParseOptions::default());
     let buf = arena.to_raw_buffer();
     // Use the buffer path (simulating the NAPI path).
     let html_buf = tryckeri_hast::mdast_to_hast_buffer(&buf).unwrap();
@@ -153,7 +153,7 @@ console.log("hello");
 
 ---
 "#;
-    let arena = parse(md, &ParseOptions::default());
+    let (arena, _) = parse(md, &ParseOptions::default());
     let html = tryckeri_hast::mdast_to_html(&arena);
     assert!(html.contains("<h1>"), "heading: {html}");
     assert!(html.contains("<strong>"), "bold: {html}");
@@ -173,7 +173,7 @@ console.log("hello");
 #[test]
 fn jsx_inline_with_children() {
     // `a <b>c</b> d` — inline JSX with text children.
-    let arena = parse("a <b>c</b> d", &ParseOptions::mdx());
+    let (arena, _) = parse("a <b>c</b> d", &ParseOptions::mdx());
     let jsx = (0..arena.len() as u32)
         .map(|i| arena.get_node(i))
         .find(|n| n.node_type == mdast_arena::NodeType::MdxJsxTextElement as u8)
@@ -188,7 +188,7 @@ fn jsx_inline_with_children() {
 
 #[test]
 fn jsx_fragment_with_children() {
-    let arena = parse("<>a</>", &ParseOptions::mdx());
+    let (arena, _) = parse("<>a</>", &ParseOptions::mdx());
     let jsx = (0..arena.len() as u32)
         .map(|i| arena.get_node(i))
         .find(|n| n.node_type == mdast_arena::NodeType::MdxJsxTextElement as u8)
@@ -202,7 +202,7 @@ fn jsx_fragment_with_children() {
 
 #[test]
 fn jsx_self_closing_no_children() {
-    let arena = parse("<Component />", &ParseOptions::mdx());
+    let (arena, _) = parse("<Component />", &ParseOptions::mdx());
     let jsx = (0..arena.len() as u32)
         .map(|i| arena.get_node(i))
         .find(|n| {
@@ -220,7 +220,7 @@ fn jsx_self_closing_no_children() {
 #[test]
 fn jsx_flow_with_children() {
     // Multi-line JSX with content.
-    let arena = parse("<x>\n  b\n</x>", &ParseOptions::mdx());
+    let (arena, _) = parse("<x>\n  b\n</x>", &ParseOptions::mdx());
     let jsx = (0..arena.len() as u32)
         .map(|i| arena.get_node(i))
         .find(|n| n.node_type == mdast_arena::NodeType::MdxJsxFlowElement as u8)
@@ -234,7 +234,7 @@ fn jsx_flow_with_children() {
 
 #[test]
 fn jsx_flow_with_children_html() {
-    let arena = parse("<h1>asd</h1>\n# qwe", &ParseOptions::mdx());
+    let (arena, _) = parse("<h1>asd</h1>\n# qwe", &ParseOptions::mdx());
     let html = tryckeri_hast::mdast_to_html(&arena);
     // Both the explicit <h1> and the markdown # heading should be present.
     assert!(html.contains("asd"), "expected asd in: {html}");
@@ -255,7 +255,7 @@ fn mdx_compile_via_new_parser() {
 
 Some {expression} here.
 "#;
-    let arena = parse(md, &ParseOptions::mdx());
+    let (arena, _) = parse(md, &ParseOptions::mdx());
     // Verify the arena has MDX nodes.
     let has_esm = (0..arena.len() as u32)
         .any(|i| arena.get_node(i).node_type == mdast_arena::NodeType::MdxjsEsm as u8);

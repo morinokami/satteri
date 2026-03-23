@@ -436,19 +436,31 @@ fn tab_indent_code_fence_in_list_compiles() {
     // 8 spaces of indent inside a "5. " list item (5 spaces after list strip).
     let input = "5. item:\n\n        ```ts\n    content {a: 1}\n        ```\n";
     let result = mdxjs::compile(input, &mdxjs::Options::default());
-    assert!(result.is_ok(), "deep-indent code fence failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "deep-indent code fence failed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
 fn double_quote_string_expression() {
     let input = r#"{"hello"}"#;
     let result = mdxjs::compile(input, &mdxjs::Options::default());
-    assert!(result.is_ok(), "Double-quote expression failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Double-quote expression failed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
 fn double_brace_object_expression() {
     let input = r#"{{ key: "value" }}"#;
     let result = mdxjs::compile(input, &mdxjs::Options::default());
-    assert!(result.is_ok(), "Double-brace expression failed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Double-brace expression failed: {:?}",
+        result.err()
+    );
 }

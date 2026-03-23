@@ -77,11 +77,11 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
     // keep the arena node open and make subsequent events children.
     // The stack tracks open JSX tag names so we can match closing tags.
     let mut jsx_stack: Vec<(String, u32)> = Vec::new(); // (tag_name, start_offset)
-    // Count of End events to skip (from nodes we closed early during JSX pairing).
+                                                        // Count of End events to skip (from nodes we closed early during JSX pairing).
     let mut skip_end_events: usize = 0;
     let mut mdx_errors: Vec<(usize, String)> = Vec::new();
 
-    while let Some((event, range)) = parser.next() {
+    for (event, range) in parser.by_ref() {
         let start = range.start as u32;
         let end = range.end as u32;
         let (start_line, start_col) = line_index.offset_to_line_col(start);
@@ -272,11 +272,15 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
                         JsxTagKind::Closing(close_name) => {
                             if let Some((open_name, open_offset)) = jsx_stack.pop() {
                                 if close_name != open_name {
-                                    let open_loc = byte_offset_to_line_col(source, open_offset as usize);
-                                    mdx_errors.push((start as usize, format!(
+                                    let open_loc =
+                                        byte_offset_to_line_col(source, open_offset as usize);
+                                    mdx_errors.push((
+                                        start as usize,
+                                        format!(
                                         "Unexpected closing tag `</{close_name}>`, expected \
                                          corresponding closing tag for `<{open_name}>` ({open_loc})"
-                                    )));
+                                    ),
+                                    ));
                                 }
                                 let target_depth = find_jsx_depth(&builder);
                                 let close_count = builder.stack_depth() - target_depth;
@@ -541,9 +545,10 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
     // Check for unclosed JSX tags.
     for (name, offset) in &jsx_stack {
         let loc = byte_offset_to_line_col(source, *offset as usize);
-        mdx_errors.push((*offset as usize, format!(
-            "Expected a closing tag for `<{name}>` ({loc})"
-        )));
+        mdx_errors.push((
+            *offset as usize,
+            format!("Expected a closing tag for `<{name}>` ({loc})"),
+        ));
     }
 
     // Merge with pulldown-cmark parser-level MDX errors.
@@ -895,7 +900,7 @@ mod tests {
 
     #[test]
     fn parse_simple_paragraph() {
-        let arena = parse("hello world", &ParseOptions::default());
+        let (arena, _) = parse("hello world", &ParseOptions::default());
         assert!(arena.len() >= 2); // root + paragraph + text
         let root = arena.get_node(0);
         assert_eq!(root.node_type, NodeType::Root as u8);
@@ -903,7 +908,7 @@ mod tests {
 
     #[test]
     fn parse_heading() {
-        let arena = parse("# Hello\n", &ParseOptions::default());
+        let (arena, _) = parse("# Hello\n", &ParseOptions::default());
         // Find the heading node.
         let heading = (0..arena.len() as u32)
             .map(|i| arena.get_node(i))
@@ -915,7 +920,7 @@ mod tests {
 
     #[test]
     fn parse_emphasis() {
-        let arena = parse("*hello*", &ParseOptions::default());
+        let (arena, _) = parse("*hello*", &ParseOptions::default());
         let has_em = (0..arena.len() as u32)
             .any(|i| arena.get_node(i).node_type == NodeType::Emphasis as u8);
         assert!(has_em);
@@ -923,7 +928,7 @@ mod tests {
 
     #[test]
     fn parse_link() {
-        let arena = parse("[text](https://example.com)", &ParseOptions::default());
+        let (arena, _) = parse("[text](https://example.com)", &ParseOptions::default());
         let link = (0..arena.len() as u32)
             .map(|i| arena.get_node(i))
             .find(|n| n.node_type == NodeType::Link as u8)
@@ -934,7 +939,7 @@ mod tests {
 
     #[test]
     fn parse_code_block() {
-        let arena = parse("```rust\nfn main() {}\n```\n", &ParseOptions::default());
+        let (arena, _) = parse("```rust\nfn main() {}\n```\n", &ParseOptions::default());
         let code = (0..arena.len() as u32)
             .map(|i| arena.get_node(i))
             .find(|n| n.node_type == NodeType::Code as u8)
@@ -945,7 +950,7 @@ mod tests {
 
     #[test]
     fn parse_list() {
-        let arena = parse("- a\n- b\n", &ParseOptions::default());
+        let (arena, _) = parse("- a\n- b\n", &ParseOptions::default());
         let list = (0..arena.len() as u32)
             .map(|i| arena.get_node(i))
             .find(|n| n.node_type == NodeType::List as u8)
@@ -956,7 +961,7 @@ mod tests {
 
     #[test]
     fn parse_mdx_expression() {
-        let arena = parse("{1 + 1}\n", &ParseOptions::mdx());
+        let (arena, _) = parse("{1 + 1}\n", &ParseOptions::mdx());
         let expr = (0..arena.len() as u32)
             .map(|i| arena.get_node(i))
             .find(|n| n.node_type == NodeType::MdxFlowExpression as u8)
@@ -967,7 +972,7 @@ mod tests {
 
     #[test]
     fn parse_mdx_jsx() {
-        let arena = parse("<Component />\n", &ParseOptions::mdx());
+        let (arena, _) = parse("<Component />\n", &ParseOptions::mdx());
         let jsx = (0..arena.len() as u32)
             .map(|i| arena.get_node(i))
             .find(|n| n.node_type == NodeType::MdxJsxFlowElement as u8)
@@ -978,7 +983,7 @@ mod tests {
 
     #[test]
     fn parse_mdx_esm() {
-        let arena = parse("import a from 'b'\n\nc\n", &ParseOptions::mdx());
+        let (arena, _) = parse("import a from 'b'\n\nc\n", &ParseOptions::mdx());
         let esm = (0..arena.len() as u32)
             .map(|i| arena.get_node(i))
             .find(|n| n.node_type == NodeType::MdxjsEsm as u8)
@@ -989,7 +994,7 @@ mod tests {
 
     #[test]
     fn roundtrip_to_buffer() {
-        let arena = parse("# Hello\n\nworld\n", &ParseOptions::default());
+        let (arena, _) = parse("# Hello\n\nworld\n", &ParseOptions::default());
         let buf = arena.to_raw_buffer();
         let view = MdastArena::from_raw_buffer(&buf).expect("valid buffer");
         assert_eq!(view.node_count() as usize, arena.len());
