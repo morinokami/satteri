@@ -1,4 +1,3 @@
-import type { MaybePromise } from "./types.js";
 import { materializeHastNode, type HastNode } from "./hast-materializer.js";
 import {
   HastReader,
@@ -119,18 +118,18 @@ class HastVisitorContextImpl implements HastVisitorContext {
 }
 
 export interface HastVisitorInstance {
-  before?(ctx: HastVisitorContext): MaybePromise<void>;
-  after?(ctx: HastVisitorContext): MaybePromise<void>;
-  transformRoot?(root: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
-  element?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
-  text?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
-  comment?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
-  raw?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
-  doctype?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
-  mdxJsxElement?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
-  mdxJsxTextElement?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
-  mdxExpression?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
-  mdxjsEsm?(node: HastNode, ctx: HastVisitorContext): MaybePromise<HastNode | void>;
+  before?(ctx: HastVisitorContext): void;
+  after?(ctx: HastVisitorContext): void;
+  transformRoot?(root: HastNode, ctx: HastVisitorContext): HastNode | void;
+  element?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
+  text?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
+  comment?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
+  raw?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
+  doctype?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
+  mdxJsxElement?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
+  mdxJsxTextElement?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
+  mdxExpression?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
+  mdxjsEsm?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
 }
 
 export interface VisitResult {
@@ -302,24 +301,20 @@ const TYPE_TO_METHOD: Record<number, keyof HastVisitorInstance> = {
  *
  * Mutations are collected into a binary CommandBuffer (same as MDAST plugins).
  */
-export async function visitHast(
+export function visitHast(
   reader: HastReader,
   plugin: HastVisitorInstance,
   dataMap: DataMap,
-): Promise<VisitResult> {
+): VisitResult {
   const ctx = new HastVisitorContextImpl();
   const returnBuffer = new CommandBuffer();
 
-  {
-    const v = plugin.before?.(ctx);
-    if (v instanceof Promise) await v;
-  }
+  plugin.before?.(ctx);
 
   if (typeof plugin.transformRoot === "function") {
     // Full materialization path via transformRoot
     const root = materializeHastNode(reader, 0, dataMap);
-    let result = plugin.transformRoot(root, ctx);
-    if (result instanceof Promise) result = await result;
+    const result = plugin.transformRoot(root, ctx);
     if (result != null) {
       returnBuffer.replaceRawJson(0, JSON.stringify(markHast(result)));
     }
@@ -334,12 +329,11 @@ export async function visitHast(
 
       if (methodName && methodName !== "transformRoot") {
         const fn = plugin[methodName] as
-          | ((node: HastNode, ctx: HastVisitorContext) => MaybePromise<HastNode | void>)
+          | ((node: HastNode, ctx: HastVisitorContext) => HastNode | void)
           | undefined;
         if (typeof fn === "function") {
           const node = materializeForVisitor(nodeType, nodeId, reader, dataMap);
-          let result = fn.call(plugin, node, ctx);
-          if (result instanceof Promise) result = await result;
+          const result = fn.call(plugin, node, ctx);
           if (result != null) {
             returnBuffer.replaceRawJson(nodeId, JSON.stringify(markHast(result)));
           }
@@ -353,10 +347,7 @@ export async function visitHast(
     }
   }
 
-  {
-    const v = plugin.after?.(ctx);
-    if (v instanceof Promise) await v;
-  }
+  plugin.after?.(ctx);
 
   // Merge: return-value commands first, then context commands
   const ctxBuf = ctx.getCommandBuffer().getBuffer();

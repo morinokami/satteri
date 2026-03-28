@@ -3092,4 +3092,34 @@ text
             .iter()
             .any(|e| matches!(e, Event::Start(Tag::Paragraph))));
     }
+
+    #[test]
+    fn mdx_expression_in_heading() {
+        let events: Vec<_> = mdx_parser("# {title}\n").collect();
+        let has_heading = events
+            .iter()
+            .any(|e| matches!(e, Event::Start(Tag::Heading { .. })));
+        assert!(has_heading, "Should have a heading");
+        let has_expr = events
+            .iter()
+            .any(|e| matches!(e, Event::MdxTextExpression(s) if s.as_ref() == "title"));
+        assert!(
+            has_expr,
+            "Heading should contain MdxTextExpression, got: {:?}",
+            events
+        );
+    }
+
+    #[test]
+    fn mdx_expression_mixed_text_in_heading() {
+        let events: Vec<_> = mdx_parser("## Hello {name}\n").collect();
+        let has_text = events
+            .iter()
+            .any(|e| matches!(e, Event::Text(s) if s.contains("Hello")));
+        let has_expr = events
+            .iter()
+            .any(|e| matches!(e, Event::MdxTextExpression(s) if s.as_ref() == "name"));
+        assert!(has_text, "Should have text, got: {:?}", events);
+        assert!(has_expr, "Should have expression, got: {:?}", events);
+    }
 }

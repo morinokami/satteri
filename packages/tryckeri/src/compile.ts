@@ -39,10 +39,10 @@ function initPlugins<T>(
 // HAST plugin runner
 // ---------------------------------------------------------------------------
 
-async function runHastPlugins(
+function runHastPlugins(
   hastBuf: Uint8Array,
   plugins: HastPluginDefinition[],
-): Promise<Uint8Array> {
+): Uint8Array {
   if (plugins.length === 0) return hastBuf;
 
   const instances = initPlugins(plugins);
@@ -51,7 +51,7 @@ async function runHastPlugins(
   for (const { instance } of instances) {
     const reader = new HastReader(currentBuffer);
     const dataMap = new DataMap();
-    const result = await visitHast(reader, instance, dataMap);
+    const result = visitHast(reader, instance, dataMap);
 
     if (result.hasMutations) {
       currentBuffer = applyMutations(currentBuffer, result.commandBuffer);
@@ -87,10 +87,10 @@ export interface CompileOptions {
   optimizeStatic?: OptimizeStaticConfig;
 }
 
-export async function compileMarkdownToHtml(
+export function compileMarkdownToHtml(
   source: string,
   options: CompileOptions = {},
-): Promise<string> {
+): string {
   const { mdastPlugins = [], hastPlugins = [] } = options;
 
   // Fast path: no plugins → single NAPI call, zero JS overhead
@@ -102,7 +102,7 @@ export async function compileMarkdownToHtml(
 
   if (mdastPlugins.length > 0) {
     const instances = initPlugins(mdastPlugins);
-    const result = await runPluginsOnBuffer(mdastBuf, instances);
+    const result = runPluginsOnBuffer(mdastBuf, instances);
     mdastBuf =
       result.buffer instanceof Uint8Array
         ? result.buffer
@@ -110,15 +110,15 @@ export async function compileMarkdownToHtml(
   }
 
   let hastBuf = mdastBufferToHastBuffer(mdastBuf);
-  hastBuf = await runHastPlugins(hastBuf, hastPlugins);
+  hastBuf = runHastPlugins(hastBuf, hastPlugins);
 
   return hastBufferToHtmlStr(hastBuf);
 }
 
-export async function compileMdxToJs(
+export function compileMdxToJs(
   source: string,
   options: CompileOptions = {},
-): Promise<string> {
+): string {
   const { mdastPlugins = [], hastPlugins = [], optimizeStatic } = options;
 
   // Fast path: no plugins → single NAPI call, zero JS overhead
@@ -133,7 +133,7 @@ export async function compileMdxToJs(
 
   if (mdastPlugins.length > 0) {
     const instances = initPlugins(mdastPlugins);
-    const result = await runPluginsOnBuffer(mdastBuf, instances);
+    const result = runPluginsOnBuffer(mdastBuf, instances);
     mdastBuf =
       result.buffer instanceof Uint8Array
         ? result.buffer
@@ -141,7 +141,7 @@ export async function compileMdxToJs(
   }
 
   let hastBuf = mdastBufferToHastBuffer(mdastBuf);
-  hastBuf = await runHastPlugins(hastBuf, hastPlugins);
+  hastBuf = runHastPlugins(hastBuf, hastPlugins);
 
   const mdxOptions = optimizeStatic
     ? { optimizeStatic }

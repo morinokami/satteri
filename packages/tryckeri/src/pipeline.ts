@@ -39,11 +39,11 @@ export interface RunResult {
 /**
  * Process one arena buffer through an ordered list of initialized plugin instances.
  */
-export async function runPluginsOnBuffer(
+export function runPluginsOnBuffer(
   buffer: ArrayBuffer | Uint8Array,
   pluginInstances: { instance: ReturnType<MdastPluginDefinition["createOnce"]>; name: string }[],
   { filename = "<unknown>", dataMap }: { filename?: string; dataMap?: DataMap } = {},
-): Promise<RunResult> {
+): RunResult {
   const dm = dataMap ?? new DataMap();
   const allDiagnostics: Diagnostic[] = [];
   let totalMutations = 0;
@@ -62,7 +62,7 @@ export async function runPluginsOnBuffer(
     };
 
     const wrappedPlugin = wrapInstance(instance, fileContext);
-    const result = await visitMdast(reader, wrappedPlugin, dm);
+    const result = visitMdast(reader, wrappedPlugin, dm);
     allDiagnostics.push(...result.diagnostics);
 
     if (result.hasMutations) {

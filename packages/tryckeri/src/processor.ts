@@ -56,18 +56,18 @@ class Processor {
     return this.#initializedPlugins;
   }
 
-  async processBuffer(
+  processBuffer(
     buffer: ArrayBuffer | Uint8Array,
     options: { filename?: string } = {},
-  ): Promise<ProcessBufferResult> {
+  ): ProcessBufferResult {
     return runPluginsOnBuffer(buffer, this.#getPluginInstances(), options);
   }
 
-  async processBufferToTree(
+  processBufferToTree(
     buffer: ArrayBuffer | Uint8Array,
     options: { filename?: string } = {},
-  ): Promise<ProcessTreeResult> {
-    const result = await this.processBuffer(buffer, options);
+  ): ProcessTreeResult {
+    const result = this.processBuffer(buffer, options);
     const reader = new MdastReader(result.buffer);
     const tree = materializeTree(reader, result.dataMap);
     return {

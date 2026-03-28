@@ -1898,8 +1898,12 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         let header_start = ix;
         let header_node_idx = self.tree.push(); // so that we can set the endpoint later
 
-        // trim the trailing attribute block before parsing the entire line, if necessary
+        // trim the trailing attribute block before parsing the entire line, if necessary.
+        // When MDX is enabled, `{...}` in headings should be treated as MDX expressions,
+        // not heading attribute blocks. MDX expressions and heading attributes use the
+        // same `{...}` syntax and would conflict.
         let (end, content_end, attrs) = if self.options.contains(Options::ENABLE_HEADING_ATTRIBUTES)
+            && !self.options.contains(Options::ENABLE_MDX)
         {
             // the start of the next line is the end of the header since the
             // header cannot have line breaks
@@ -2343,7 +2347,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         header_start: usize,
         header_end: usize,
     ) -> (usize, Option<HeadingAttributes<'a>>) {
-        if !self.options.contains(Options::ENABLE_HEADING_ATTRIBUTES) {
+        if !self.options.contains(Options::ENABLE_HEADING_ATTRIBUTES)
+            || self.options.contains(Options::ENABLE_MDX)
+        {
             return (header_end, None);
         }
 

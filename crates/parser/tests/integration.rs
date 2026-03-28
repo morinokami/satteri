@@ -266,3 +266,20 @@ Some {expression} here.
         .any(|i| arena.get_node(i).node_type == mdast_arena::NodeType::MdxJsxFlowElement as u8);
     assert!(has_jsx, "should have JSX flow node");
 }
+
+#[test]
+fn task_list_to_html() {
+    let (arena, _) = parse("- [ ] unchecked\n- [x] checked\n", &ParseOptions::default());
+    let html = tryckeri_hast::mdast_to_html(&arena);
+    eprintln!("HTML output: {html}");
+    assert!(html.contains("type=\"checkbox\""), "expected checkbox input, got: {html}");
+    assert!(html.contains("checked"), "expected checked attribute, got: {html}");
+}
+
+#[test]
+fn task_list_loose_to_html() {
+    let (arena, _) = parse("- [ ] unchecked\n\n- [x] checked\n", &ParseOptions::default());
+    let html = tryckeri_hast::mdast_to_html(&arena);
+    eprintln!("HTML output (loose): {html}");
+    assert!(html.contains("type=\"checkbox\""), "expected checkbox input, got: {html}");
+}

@@ -518,21 +518,83 @@ describe("compileMdxToJs", () => {
     expect(js).toContain('"h1"');
   });
 
-  test("async HAST plugin works", async () => {
-    const asyncPlugin = defineHastPlugin({
-      name: "async-class-adder",
+  test("rawHtml preserves curly braces as literal text", async () => {
+    const plugin = defineMdastPlugin({
+      name: "raw-html-braces",
       createOnce: () => ({
-        async element(node: HastNode, ctx: HastVisitorContext) {
-          // Simulate async work
-          await new Promise((resolve) => setTimeout(resolve, 1));
-          ctx.setProperty(node, "class", "async-added");
+        code() {
+          return {
+            rawHtml:
+              '<pre class="shiki"><code><span style="color:red">{foo: 1}</span></code></pre>',
+          };
         },
       }),
     });
 
-    const html = await compileMarkdownToHtml("# Hello", {
-      hastPlugins: [asyncPlugin],
+    const js = await compileMdxToJs("```js\nconst x = {foo: 1}\n```", {
+      mdastPlugins: [plugin],
     });
-    expect(html).toContain('class="async-added"');
+
+    // Curly braces should appear as string content, not parsed as MDX expressions.
+    // The escaping splits them into separate children: "{", "foo: 1", "}"
+    expect(js).toContain('"{"');
+    expect(js).toContain('"}"');
+    expect(js).toContain("foo: 1");
+    expect(js).not.toContain("Could not parse");
+    expect(js).toContain("shiki");
+  });
+
+  test("rawHtml with multiline shiki output preserves all content", async () => {
+    const shikiHtml = `<pre class="shiki github-dark" style="background-color:#24292e"><code><span class="line"><span style="color:#F97583">const</span><span style="color:#E1E4E8"> x = </span><span style="color:#B392F0">{</span></span>\n<span class="line"><span style="color:#E1E4E8">  foo: </span><span style="color:#79B8FF">1</span></span>\n<span class="line"><span style="color:#B392F0">}</span></span></code></pre>`;
+
+    const plugin = defineMdastPlugin({
+      name: "raw-html-shiki",
+      createOnce: () => ({
+        code() {
+          return { rawHtml: shikiHtml };
+        },
+      }),
+    });
+
+    const js = await compileMdxToJs("```js\nconst x = {\n  foo: 1\n}\n```", {
+      mdastPlugins: [plugin],
+    });
+
+    expect(js).toContain("const");
+    expect(js).toContain("foo");
+    expect(js).toContain("shiki");
+    expect(js).not.toContain("Could not parse");
+  });
+
+  test("MDX expression in heading is preserved", async () => {
+    const js = await compileMdxToJs("# {title}");
+    expect(js).toContain("children: title");
+  });
+
+  test("MDX expression mixed with text in heading", async () => {
+    const js = await compileMdxToJs("## Hello {name}");
+    expect(js).toContain('"Hello "');
+    expect(js).toContain("name");
+  });
+
+  test("MDX frontmatter expression in heading", async () => {
+    const js = await compileMdxToJs("# {frontmatter.title}");
+    expect(js).toContain("frontmatter.title");
+  });
+
+  test("sync HAST plugin works", () => {
+    const plugin = defineHastPlugin({
+      name: "class-adder",
+      createOnce: () => ({
+        element(node: HastNode, ctx: HastVisitorContext) {
+          ctx.setProperty(node, "class", "added");
+        },
+      }),
+    });
+
+    const html = compileMarkdownToHtml("# Hello", {
+      hastPlugins: [plugin],
+    });
+    expect(html).toContain('class="added"');
   });
 });

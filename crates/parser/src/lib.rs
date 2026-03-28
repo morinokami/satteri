@@ -473,14 +473,23 @@ pub fn parse(source: &str, opts: &ParseOptions) -> (MdastArena, Vec<(usize, Stri
                     .set_position(id, start, end, start_line, start_col, end_line, end_col);
             }
             Event::TaskListMarker(checked) => {
-                // Task list markers modify the parent ListItem's data.
-                // We handle this by storing as list item data; the parent
-                // ListItem was already opened so we update it.
-                // For now, store as a synthetic text node (the parent
-                // list item already has the checked state from its data).
-                // Actually, let's just skip it — the ListItem data is set
-                // when we open the Item tag.
-                let _ = checked;
+                // Update the parent ListItem's checked state.
+                // In tight lists, ListItem is the current stack top.
+                // In loose lists, a Paragraph is open inside the ListItem,
+                // so we walk up the stack to find it.
+                let checked_val = if checked { 1 } else { 0 };
+                let data = encode_list_item_data(checked_val, false);
+                let depth = builder.stack_depth();
+                for i in (0..depth).rev() {
+                    if let Some(node_id) = builder.stack_node_id(i) {
+                        if builder.arena_ref().get_node(node_id).node_type
+                            == NodeType::ListItem as u8
+                        {
+                            builder.arena_mut().set_type_data(node_id, &data);
+                            break;
+                        }
+                    }
+                }
             }
             Event::FootnoteReference(label) => {
                 let sr = builder.alloc_string(&label);
@@ -919,7 +928,7 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mdast_arena::decode_heading_data;
+    use mdast_arena::{decode_heading_data, decode_list_item_data};
 
     #[test]
     fn parse_simple_paragraph() {
@@ -1015,6 +1024,84 @@ mod tests {
             .expect("should have an MDX ESM node");
         let data = mdast_arena::decode_expression_data(arena.get_type_data(esm.id));
         assert!(arena.get_str(data.value).contains("import"));
+    }
+
+    #[test]
+    fn parse_mdx_expression_in_heading() {
+        let (arena, errors) = parse("# {title}\n", &ParseOptions::mdx());
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+
+        let heading = (0..arena.len() as u32)
+            .map(|i| arena.get_node(i))
+            .find(|n| n.node_type == NodeType::Heading as u8)
+            .expect("should have a heading");
+
+        let children = arena.get_children(heading.id);
+        assert!(
+            !children.is_empty(),
+            "heading should have children (the MDX expression)"
+        );
+
+        let expr = children
+            .iter()
+            .map(|&id| arena.get_node(id))
+            .find(|n| n.node_type == NodeType::MdxTextExpression as u8)
+            .expect("heading should have MdxTextExpression child");
+        let data = mdast_arena::decode_expression_data(arena.get_type_data(expr.id));
+        assert_eq!(arena.get_str(data.value), "title");
+    }
+
+    #[test]
+    fn parse_mdx_expression_mixed_with_text_in_heading() {
+        let (arena, errors) = parse("## Hello {name}\n", &ParseOptions::mdx());
+        assert!(errors.is_empty(), "unexpected errors: {:?}", errors);
+
+        let heading = (0..arena.len() as u32)
+            .map(|i| arena.get_node(i))
+            .find(|n| n.node_type == NodeType::Heading as u8)
+            .expect("should have a heading");
+
+        let children = arena.get_children(heading.id);
+        assert!(
+            children.len() >= 2,
+            "heading should have text + expression children, got {} children",
+            children.len()
+        );
+
+        // Should have a text child and an expression child
+        let has_text = children
+            .iter()
+            .any(|&id| arena.get_node(id).node_type == NodeType::Text as u8);
+        let has_expr = children
+            .iter()
+            .any(|&id| arena.get_node(id).node_type == NodeType::MdxTextExpression as u8);
+        assert!(has_text, "heading should have text child");
+        assert!(has_expr, "heading should have expression child");
+    }
+
+    #[test]
+    fn parse_task_list() {
+        let (arena, _) = parse("- [ ] unchecked\n- [x] checked\n", &ParseOptions::default());
+        let items: Vec<_> = (0..arena.len() as u32)
+            .filter(|&i| arena.get_node(i).node_type == NodeType::ListItem as u8)
+            .collect();
+        assert_eq!(items.len(), 2);
+
+        let first = decode_list_item_data(arena.get_type_data(items[0]));
+        assert_eq!(first.checked, 0, "first item should be unchecked");
+
+        let second = decode_list_item_data(arena.get_type_data(items[1]));
+        assert_eq!(second.checked, 1, "second item should be checked");
+    }
+
+    #[test]
+    fn parse_regular_list_not_task() {
+        let (arena, _) = parse("- plain item\n", &ParseOptions::default());
+        let item = (0..arena.len() as u32)
+            .find(|&i| arena.get_node(i).node_type == NodeType::ListItem as u8)
+            .expect("should have a list item");
+        let data = decode_list_item_data(arena.get_type_data(item));
+        assert_eq!(data.checked, 2, "regular list item should not be a task item");
     }
 
     #[test]
