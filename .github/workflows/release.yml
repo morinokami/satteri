@@ -135,7 +135,7 @@ jobs:
           path: packages/tryckeri/artifacts
 
       - name: Build TypeScript and prepare artifacts
-        run: pnpm run build:ts && napi create-npm-dirs && pnpm run artifacts
+        run: pnpm run build:ts && pnpm napi create-npm-dirs && pnpm run artifacts
         working-directory: packages/tryckeri
 
       - name: Check if release PR merge
