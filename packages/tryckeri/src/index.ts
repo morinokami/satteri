@@ -19,6 +19,18 @@ export {
   parseToHtml,
   parseMdxToHtml,
   applyMutations,
+  applyMutationsAndConvertToHast,
+  applyMutationsAndRenderHtml,
+  applyMutationsAndCompileJs,
+  walkAndCollect,
+  createHastHandle,
+  createHastHandleFromBuffer,
+  createMdxHastHandle,
+  walkHandle,
+  applyCommandsToHandle,
+  renderHandle,
+  compileHandle,
+  serializeHandle,
 } from "../index.js";
 
 // HAST support

@@ -108,13 +108,18 @@ const { instance: __napiInstance, module: __wasiModule, napiModule: __napiModule
   },
 })
 module.exports = __napiModule.exports
+module.exports.applyCommandsToHandle = __napiModule.exports.applyCommandsToHandle
 module.exports.applyMutations = __napiModule.exports.applyMutations
 module.exports.applyMutationsAndCompileJs = __napiModule.exports.applyMutationsAndCompileJs
 module.exports.applyMutationsAndConvertToHast = __napiModule.exports.applyMutationsAndConvertToHast
 module.exports.applyMutationsAndRenderHtml = __napiModule.exports.applyMutationsAndRenderHtml
+module.exports.compileHandle = __napiModule.exports.compileHandle
 module.exports.compileHastBufferToJs = __napiModule.exports.compileHastBufferToJs
 module.exports.compileMdx = __napiModule.exports.compileMdx
 module.exports.compileMdxFromBuffer = __napiModule.exports.compileMdxFromBuffer
+module.exports.createHastHandle = __napiModule.exports.createHastHandle
+module.exports.createHastHandleFromBuffer = __napiModule.exports.createHastHandleFromBuffer
+module.exports.createMdxHastHandle = __napiModule.exports.createMdxHastHandle
 module.exports.getBufferFormat = __napiModule.exports.getBufferFormat
 module.exports.hastBufferToHtmlStr = __napiModule.exports.hastBufferToHtmlStr
 module.exports.mdastBufferToHastBuffer = __napiModule.exports.mdastBufferToHastBuffer
@@ -124,3 +129,7 @@ module.exports.parseMdxToHtml = __napiModule.exports.parseMdxToHtml
 module.exports.parseToBuffer = __napiModule.exports.parseToBuffer
 module.exports.parseToHastBuffer = __napiModule.exports.parseToHastBuffer
 module.exports.parseToHtml = __napiModule.exports.parseToHtml
+module.exports.renderHandle = __napiModule.exports.renderHandle
+module.exports.serializeHandle = __napiModule.exports.serializeHandle
+module.exports.walkAndCollect = __napiModule.exports.walkAndCollect
+module.exports.walkHandle = __napiModule.exports.walkHandle

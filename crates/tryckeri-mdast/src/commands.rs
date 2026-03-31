@@ -110,6 +110,9 @@ pub struct JsNode {
     /// Marker: when true, this node is a HAST node (not MDAST).
     #[serde(rename = "_hast", default)]
     pub is_hast: bool,
+    /// When true, keep the original node's children instead of replacing them.
+    #[serde(rename = "_keepChildren", default)]
+    pub keep_children: bool,
 }
 
 #[derive(Debug, Deserialize)]

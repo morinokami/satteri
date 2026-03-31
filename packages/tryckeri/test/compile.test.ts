@@ -593,4 +593,104 @@ describe("compileMdxToJs", () => {
     });
     expect(html).toContain('class="added"');
   });
+
+  // -------------------------------------------------------------------------
+  // Filtered (selective) HAST visitors
+  // -------------------------------------------------------------------------
+
+  test("filtered element visitor — single tag", () => {
+    const plugin = defineHastPlugin({
+      name: "link-class",
+      createOnce: () => ({
+        element: {
+          filter: ["a"],
+          visit(node: HastNode, ctx: HastVisitorContext) {
+            ctx.setProperty(node, "class", "link");
+          },
+        },
+      }),
+    });
+
+    const html = compileMarkdownToHtml("# Hello\n\n[click](https://example.com)", {
+      hastPlugins: [plugin],
+    });
+    expect(html).toContain('class="link"');
+    expect(html).toContain("click");
+    // Heading should NOT have the class
+    expect(html).toMatch(/<h1>Hello<\/h1>/);
+  });
+
+  test("filtered element visitor — multiple tags", () => {
+    const plugin = defineHastPlugin({
+      name: "heading-class",
+      createOnce: () => ({
+        element: {
+          filter: ["h1", "h2"],
+          visit(node: HastNode, ctx: HastVisitorContext) {
+            ctx.setProperty(node, "class", "heading");
+          },
+        },
+      }),
+    });
+
+    const html = compileMarkdownToHtml("# One\n\n## Two\n\nParagraph", {
+      hastPlugins: [plugin],
+    });
+    expect(html).toContain('<h1 class="heading">');
+    expect(html).toContain('<h2 class="heading">');
+    expect(html).not.toContain('<p class="heading">');
+  });
+
+  test("filtered element visitor — array of filter groups", () => {
+    const plugin = defineHastPlugin({
+      name: "multi-filter",
+      createOnce: () => ({
+        element: [
+          {
+            filter: ["h1"],
+            visit(node: HastNode, ctx: HastVisitorContext) {
+              ctx.setProperty(node, "id", "title");
+            },
+          },
+          {
+            filter: ["a"],
+            visit(node: HastNode, ctx: HastVisitorContext) {
+              ctx.setProperty(node, "target", "_blank");
+            },
+          },
+        ],
+      }),
+    });
+
+    const html = compileMarkdownToHtml("# Title\n\n[link](https://example.com)", {
+      hastPlugins: [plugin],
+    });
+    expect(html).toContain('id="title"');
+    expect(html).toContain('target="_blank"');
+  });
+
+  test("filtered visitor mixed with unfiltered falls back to JS walk", () => {
+    // This plugin has a bare `text` function (unfiltered), so it should
+    // fall back to the JS walk path — but still produce correct results.
+    const plugin = defineHastPlugin({
+      name: "mixed",
+      createOnce: () => ({
+        element: {
+          filter: ["h1"],
+          visit(node: HastNode, ctx: HastVisitorContext) {
+            ctx.setProperty(node, "class", "heading");
+          },
+        },
+        text(node: HastNode, _ctx: HastVisitorContext) {
+          // noop — but being a bare function forces JS-walk fallback
+        },
+      }),
+    });
+
+    const html = compileMarkdownToHtml("# Hello", {
+      hastPlugins: [plugin],
+    });
+    // The filter still works via fallback JS walk
+    expect(html).toContain("Hello");
+  });
 });

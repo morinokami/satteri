@@ -579,14 +579,19 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { applyMutations, applyMutationsAndCompileJs, applyMutationsAndConvertToHast, applyMutationsAndRenderHtml, compileHastBufferToJs, compileMdx, compileMdxFromBuffer, getBufferFormat, hastBufferToHtmlStr, mdastBufferToHastBuffer, parseMdxToBuffer, parseMdxToHastBuffer, parseMdxToHtml, parseToBuffer, parseToHastBuffer, parseToHtml } = nativeBinding
+const { applyCommandsToHandle, applyMutations, applyMutationsAndCompileJs, applyMutationsAndConvertToHast, applyMutationsAndRenderHtml, compileHandle, compileHastBufferToJs, compileMdx, compileMdxFromBuffer, createHastHandle, createHastHandleFromBuffer, createMdxHastHandle, getBufferFormat, hastBufferToHtmlStr, mdastBufferToHastBuffer, parseMdxToBuffer, parseMdxToHastBuffer, parseMdxToHtml, parseToBuffer, parseToHastBuffer, parseToHtml, renderHandle, serializeHandle, walkAndCollect, walkHandle } = nativeBinding
+export { applyCommandsToHandle }
 export { applyMutations }
 export { applyMutationsAndCompileJs }
 export { applyMutationsAndConvertToHast }
 export { applyMutationsAndRenderHtml }
+export { compileHandle }
 export { compileHastBufferToJs }
 export { compileMdx }
 export { compileMdxFromBuffer }
+export { createHastHandle }
+export { createHastHandleFromBuffer }
+export { createMdxHastHandle }
 export { getBufferFormat }
 export { hastBufferToHtmlStr }
 export { mdastBufferToHastBuffer }
@@ -596,3 +601,7 @@ export { parseMdxToHtml }
 export { parseToBuffer }
 export { parseToHastBuffer }
 export { parseToHtml }
+export { renderHandle }
+export { serializeHandle }
+export { walkAndCollect }
+export { walkHandle }

@@ -1,31 +1,39 @@
 /**
  * Top-level compile functions — the primary public API.
  *
- * When no plugins are provided, these functions use the fast pure-Rust path
- * (single NAPI call, zero JS overhead). Plugins trigger the full JS pipeline.
+ * The pipeline keeps the HAST arena in Rust memory via opaque handles.
+ * Only matched nodes and mutation commands cross the NAPI boundary.
  */
 
-import { DataMap } from "./data-map.js";
+import {
+  visitHast,
+  visitHastHandle,
+  resolveSubscriptions,
+  type HastHandle,
+} from "./hast/hast-visitor.js";
 import { HastReader } from "./hast/hast-reader.js";
-import { visitHast } from "./hast/hast-visitor.js";
+import { DataMap } from "./data-map.js";
 import { runPluginsOnBuffer, ProcessorContext } from "./pipeline.js";
 import type { MdastPluginDefinition, HastPluginDefinition } from "./plugin.js";
 import {
-  parseToBuffer,
   parseToHtml,
+  compileMdx,
+  createHastHandle,
+  createMdxHastHandle,
+  createHastHandleFromBuffer,
+  renderHandle,
+  compileHandle,
+  serializeHandle,
+  applyMutations,
+  applyCommandsToHandle,
+  parseToBuffer,
   parseMdxToBuffer,
   mdastBufferToHastBuffer,
-  hastBufferToHtmlStr,
-  compileMdx,
-  compileHastBufferToJs,
-  applyMutations,
   applyMutationsAndConvertToHast,
-  applyMutationsAndRenderHtml,
-  applyMutationsAndCompileJs,
 } from "../index.js";
 
 // ---------------------------------------------------------------------------
-// Plugin initialization
+// Helpers
 // ---------------------------------------------------------------------------
 
 function initPlugins<T>(
@@ -38,46 +46,32 @@ function initPlugins<T>(
   }));
 }
 
-/** Extract just the buffer from a RunResult, discarding dataMap/diagnostics references. */
 function extractBuffer(result: { buffer: ArrayBuffer | Uint8Array }): Uint8Array {
   return result.buffer instanceof Uint8Array ? result.buffer : new Uint8Array(result.buffer);
 }
 
-
 // ---------------------------------------------------------------------------
-// HAST plugin runner
+// HAST plugin runner (handle-based, arena stays in Rust)
 // ---------------------------------------------------------------------------
 
-interface HastPipelineResult {
-  /** The buffer after all plugins (or all-but-last if pendingCommands is set). */
-  buffer: Uint8Array;
-  /** If the last plugin produced mutations, they're deferred here for fusion. */
-  pendingCommands: Uint8Array | null;
-}
-
-/**
- * Run HAST plugins, deferring the last plugin's mutations so the caller can
- * fuse applyMutations with the final render/compile step.
- */
-function runHastPlugins(hastBuf: Uint8Array, plugins: HastPluginDefinition[]): HastPipelineResult {
-  if (plugins.length === 0) return { buffer: hastBuf, pendingCommands: null };
+function runHastPluginsOnHandle(handle: HastHandle, plugins: HastPluginDefinition[]): void {
+  if (plugins.length === 0) return;
 
   const instances = initPlugins(plugins);
-  let currentBuffer: Uint8Array = hastBuf;
-
-  for (let i = 0; i < instances.length; i++) {
-    const result = visitHast(new HastReader(currentBuffer), instances[i]!.instance, new DataMap());
-
-    if (result.hasMutations) {
-      if (i === instances.length - 1) {
-        // Last plugin — defer mutations for fusion
-        return { buffer: currentBuffer, pendingCommands: result.commandBuffer };
+  for (const { instance } of instances) {
+    const subs = resolveSubscriptions(instance);
+    if (subs) {
+      // Handle path: Rust walks, only matched nodes cross the boundary
+      visitHastHandle(handle, instance, subs);
+    } else {
+      // Buffer fallback: transformRoot or bare function plugins
+      const buf = serializeHandle(handle);
+      const result = visitHast(new HastReader(buf), instance, new DataMap());
+      if (result.hasMutations) {
+        applyCommandsToHandle(handle, result.commandBuffer);
       }
-      currentBuffer = applyMutations(currentBuffer, result.commandBuffer);
     }
   }
-
-  return { buffer: currentBuffer, pendingCommands: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -86,92 +80,82 @@ function runHastPlugins(hastBuf: Uint8Array, plugins: HastPluginDefinition[]): H
 
 /** Configuration for static subtree collapsing during MDX compilation. */
 export interface OptimizeStaticConfig {
-  /** Component/element name to wrap collapsed HTML in (e.g. "Fragment", "div"). */
   component: string;
-  /** Prop name for the HTML string (e.g. "set:html", "dangerouslySetInnerHTML"). */
   prop: string;
-  /** If true, prop value is wrapped as `{ __html: "..." }` (React-style). Default: false. */
   wrapPropValue?: boolean;
-  /** Element tag names to exclude from collapsing (e.g. ["h1", "p"]). */
   ignoreElements?: string[];
 }
 
 export interface CompileOptions {
   mdastPlugins?: MdastPluginDefinition[];
   hastPlugins?: HastPluginDefinition[];
-  /**
-   * When set, fully-static subtrees are collapsed into raw HTML strings
-   * instead of nested `_jsx()` calls, reducing JS output size.
-   */
   optimizeStatic?: OptimizeStaticConfig;
 }
 
 export function compileMarkdownToHtml(source: string, options: CompileOptions = {}): string {
   const { mdastPlugins = [], hastPlugins = [] } = options;
 
-  // Fast path: no plugins → single NAPI call, zero JS overhead
+  // Fast path: no plugins
   if (mdastPlugins.length === 0 && hastPlugins.length === 0) {
     return parseToHtml(source);
   }
 
-  let mdastBuf: Uint8Array | null = parseToBuffer(source);
-
-  let hastBuf: Uint8Array;
+  // Create HAST handle (arena stays in Rust)
+  let handle: HastHandle;
   if (mdastPlugins.length > 0) {
-    const instances = initPlugins(mdastPlugins);
-    const mdastResult = runPluginsOnBuffer(mdastBuf, instances, { deferLast: true });
-    if (mdastResult.pendingCommands) {
-      hastBuf = applyMutationsAndConvertToHast(
-        extractBuffer(mdastResult),
-        mdastResult.pendingCommands,
-      );
-    } else {
-      hastBuf = mdastBufferToHastBuffer(extractBuffer(mdastResult));
-    }
+    handle = runMdastThenCreateHandle(source, mdastPlugins, false);
   } else {
-    hastBuf = mdastBufferToHastBuffer(mdastBuf);
+    handle = createHastHandle(source);
   }
-  mdastBuf = null;
 
-  const { buffer, pendingCommands } = runHastPlugins(hastBuf, hastPlugins);
-  if (pendingCommands) {
-    return applyMutationsAndRenderHtml(buffer, pendingCommands);
-  }
-  return hastBufferToHtmlStr(buffer);
+  // Run HAST plugins on the handle
+  runHastPluginsOnHandle(handle, hastPlugins);
+
+  // Render directly from handle — no buffer copy
+  return renderHandle(handle);
 }
 
 export function compileMdxToJs(source: string, options: CompileOptions = {}): string {
   const { mdastPlugins = [], hastPlugins = [], optimizeStatic } = options;
+  const mdxOptions = optimizeStatic ? { optimizeStatic } : undefined;
 
-  // Fast path: no plugins → single NAPI call, zero JS overhead
+  // Fast path: no plugins
   if (mdastPlugins.length === 0 && hastPlugins.length === 0) {
-    const mdxOptions = optimizeStatic ? { optimizeStatic } : undefined;
     return compileMdx(source, mdxOptions);
   }
 
-  let mdastBuf: Uint8Array | null = parseMdxToBuffer(source);
+  // Create HAST handle
+  let handle: HastHandle;
+  if (mdastPlugins.length > 0) {
+    handle = runMdastThenCreateHandle(source, mdastPlugins, true);
+  } else {
+    handle = createMdxHastHandle(source);
+  }
+
+  runHastPluginsOnHandle(handle, hastPlugins);
+
+  return compileHandle(handle, mdxOptions);
+}
+
+// ---------------------------------------------------------------------------
+// MDAST plugins → HAST handle
+// ---------------------------------------------------------------------------
+
+function runMdastThenCreateHandle(
+  source: string,
+  mdastPlugins: MdastPluginDefinition[],
+  mdx: boolean,
+): HastHandle {
+  const mdastBuf = mdx ? parseMdxToBuffer(source) : parseToBuffer(source);
+  const instances = initPlugins(mdastPlugins);
+  const result = runPluginsOnBuffer(mdastBuf, instances, { deferLast: true });
 
   let hastBuf: Uint8Array;
-  if (mdastPlugins.length > 0) {
-    const instances = initPlugins(mdastPlugins);
-    const mdastResult = runPluginsOnBuffer(mdastBuf, instances, { deferLast: true });
-    if (mdastResult.pendingCommands) {
-      hastBuf = applyMutationsAndConvertToHast(
-        extractBuffer(mdastResult),
-        mdastResult.pendingCommands,
-      );
-    } else {
-      hastBuf = mdastBufferToHastBuffer(extractBuffer(mdastResult));
-    }
+  if (result.pendingCommands) {
+    hastBuf = applyMutationsAndConvertToHast(extractBuffer(result), result.pendingCommands);
   } else {
-    hastBuf = mdastBufferToHastBuffer(mdastBuf);
+    hastBuf = mdastBufferToHastBuffer(extractBuffer(result));
   }
-  mdastBuf = null;
 
-  const mdxOptions = optimizeStatic ? { optimizeStatic } : undefined;
-  const { buffer, pendingCommands } = runHastPlugins(hastBuf, hastPlugins);
-  if (pendingCommands) {
-    return applyMutationsAndCompileJs(buffer, pendingCommands, mdxOptions);
-  }
-  return compileHastBufferToJs(buffer, mdxOptions);
+  return createHastHandleFromBuffer(hastBuf);
 }

@@ -56,13 +56,18 @@ const {
   },
 })
 export default __napiModule.exports
+export const applyCommandsToHandle = __napiModule.exports.applyCommandsToHandle
 export const applyMutations = __napiModule.exports.applyMutations
 export const applyMutationsAndCompileJs = __napiModule.exports.applyMutationsAndCompileJs
 export const applyMutationsAndConvertToHast = __napiModule.exports.applyMutationsAndConvertToHast
 export const applyMutationsAndRenderHtml = __napiModule.exports.applyMutationsAndRenderHtml
+export const compileHandle = __napiModule.exports.compileHandle
 export const compileHastBufferToJs = __napiModule.exports.compileHastBufferToJs
 export const compileMdx = __napiModule.exports.compileMdx
 export const compileMdxFromBuffer = __napiModule.exports.compileMdxFromBuffer
+export const createHastHandle = __napiModule.exports.createHastHandle
+export const createHastHandleFromBuffer = __napiModule.exports.createHastHandleFromBuffer
+export const createMdxHastHandle = __napiModule.exports.createMdxHastHandle
 export const getBufferFormat = __napiModule.exports.getBufferFormat
 export const hastBufferToHtmlStr = __napiModule.exports.hastBufferToHtmlStr
 export const mdastBufferToHastBuffer = __napiModule.exports.mdastBufferToHastBuffer
@@ -72,3 +77,7 @@ export const parseMdxToHtml = __napiModule.exports.parseMdxToHtml
 export const parseToBuffer = __napiModule.exports.parseToBuffer
 export const parseToHastBuffer = __napiModule.exports.parseToHastBuffer
 export const parseToHtml = __napiModule.exports.parseToHtml
+export const renderHandle = __napiModule.exports.renderHandle
+export const serializeHandle = __napiModule.exports.serializeHandle
+export const walkAndCollect = __napiModule.exports.walkAndCollect
+export const walkHandle = __napiModule.exports.walkHandle

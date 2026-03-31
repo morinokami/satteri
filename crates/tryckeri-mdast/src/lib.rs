@@ -19,6 +19,7 @@ pub mod node;
 pub mod raw_buffer;
 pub mod read_arena;
 pub mod rebuild;
+pub mod walk;
 
 pub use arena::MdastArena;
 pub use builder::MdastBuilder;
@@ -44,3 +45,4 @@ pub use node::{MdastNode, MdastNodeType, StringRef, NODE_STRUCT_SIZE};
 pub use raw_buffer::{BufferError, BufferHeader, MdastView, BUFFER_MAGIC, BUFFER_VERSION};
 pub use read_arena::ReadMdast;
 pub use rebuild::{rebuild, Patch};
+pub use walk::{walk_and_collect, Subscription};

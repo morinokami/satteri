@@ -15,6 +15,11 @@ import {
 } from "./hast-reader.js";
 import { CommandBuffer } from "../command-buffer.js";
 import type { DataMap } from "../data-map.js";
+import { walkHandle, applyCommandsToHandle } from "../../index.js";
+
+// Opaque handle type from NAPI — the arena lives in Rust memory.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type HastHandle = any;
 
 export interface HastDiagnostic {
   message: string;
@@ -30,6 +35,11 @@ export interface HastVisitorContext {
   getDiagnostics(): HastDiagnostic[];
 }
 
+function isChildRefArray(children: unknown): boolean {
+  if (!Array.isArray(children) || children.length === 0) return false;
+  return children.every((c: Record<string, unknown>) => c?.type === "__child_ref__");
+}
+
 /** Inject `_hast: true` marker on a HastNode and all its children for JSON serialization. */
 function markHast(node: HastNode): Record<string, unknown> {
   const n = node as unknown as Record<string, unknown>;
@@ -39,7 +49,9 @@ function markHast(node: HastNode): Record<string, unknown> {
   if ("value" in node) obj.value = n.value;
   if ("name" in node) obj.name = n.name;
   if ("attributes" in node) obj.attributes = n.attributes;
-  if ("children" in node) {
+  if ("children" in node && isChildRefArray(n.children)) {
+    obj._keepChildren = true;
+  } else if ("children" in node) {
     obj.children = (n.children as HastNode[]).map(markHast);
   }
   return obj;
@@ -116,19 +128,30 @@ class HastVisitorContextImpl implements HastVisitorContext {
   }
 }
 
+/** A filtered visitor: Rust filters by tag name, only matched nodes are sent to JS. */
+export interface HastFilteredVisitor {
+  filter: string[];
+  visit(node: HastNode, ctx: HastVisitorContext): HastNode | void;
+}
+
+type HastVisitorValue =
+  | ((node: HastNode, ctx: HastVisitorContext) => HastNode | void)
+  | HastFilteredVisitor
+  | HastFilteredVisitor[];
+
 export interface HastVisitorInstance {
   before?(ctx: HastVisitorContext): void;
   after?(ctx: HastVisitorContext): void;
   transformRoot?(root: HastNode, ctx: HastVisitorContext): HastNode | void;
-  element?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
-  text?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
-  comment?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
-  raw?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
-  doctype?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
-  mdxJsxFlowElement?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
-  mdxJsxTextElement?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
-  mdxExpression?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
-  mdxjsEsm?(node: HastNode, ctx: HastVisitorContext): HastNode | void;
+  element?: HastVisitorValue;
+  text?: HastVisitorValue;
+  comment?: HastVisitorValue;
+  raw?: HastVisitorValue;
+  doctype?: HastVisitorValue;
+  mdxJsxFlowElement?: HastVisitorValue;
+  mdxJsxTextElement?: HastVisitorValue;
+  mdxExpression?: HastVisitorValue;
+  mdxjsEsm?: HastVisitorValue;
 }
 
 export interface HastVisitResult {
@@ -307,6 +330,341 @@ function materializeForVisitor(
 }
 
 // ---------------------------------------------------------------------------
+// Selective walk helpers
+// ---------------------------------------------------------------------------
+
+export interface ResolvedSubscription {
+  nodeType: number;
+  tagFilter: string[];
+  visitFn: (node: HastNode, ctx: HastVisitorContext) => HastNode | void;
+}
+
+function isFilteredVisitor(v: unknown): v is HastFilteredVisitor {
+  return typeof v === "object" && v !== null && "filter" in v && "visit" in v;
+}
+
+/**
+ * Resolve all visitor subscriptions from a plugin instance.
+ * Bare functions become unfiltered subscriptions (empty tagFilter = match all).
+ * Filter objects/arrays become filtered subscriptions.
+ */
+/**
+ * Returns null if the plugin uses transformRoot (needs full buffer path).
+ */
+/**
+ * Resolve subscriptions. Returns null if the plugin uses transformRoot or
+ * bare functions (which may return replacement nodes needing full children).
+ * Those cases fall back to the buffer path.
+ */
+export function resolveSubscriptions(
+  plugin: HastVisitorInstance,
+): ResolvedSubscription[] | null {
+  if (plugin.transformRoot) return null;
+
+  const subs: ResolvedSubscription[] = [];
+  let hasAnyVisitor = false;
+
+  for (const [methodName, nodeType] of Object.entries(METHOD_TO_TYPE)) {
+    const value = plugin[methodName as keyof HastVisitorInstance];
+    if (value === undefined) continue;
+    hasAnyVisitor = true;
+
+    if (typeof value === "function") {
+      // Bare function — fall back to buffer path
+      return null;
+    } else if (isFilteredVisitor(value)) {
+      subs.push({ nodeType, tagFilter: value.filter, visitFn: value.visit });
+    } else if (Array.isArray(value)) {
+      for (const item of value) {
+        if (!isFilteredVisitor(item)) return null;
+        subs.push({ nodeType, tagFilter: item.filter, visitFn: item.visit });
+      }
+    } else {
+      return null;
+    }
+  }
+
+  return hasAnyVisitor ? subs : null;
+}
+
+/** Reverse map: method name → node type number */
+const METHOD_TO_TYPE: Record<string, number> = {
+  element: HAST_ELEMENT,
+  text: HAST_TEXT,
+  comment: HAST_COMMENT,
+  raw: HAST_RAW,
+  doctype: 4, // HAST_DOCTYPE
+  mdxJsxFlowElement: HAST_MDX_JSX_ELEMENT,
+  mdxJsxTextElement: HAST_MDX_JSX_TEXT_ELEMENT,
+  mdxExpression: HAST_MDX_EXPRESSION,
+  mdxjsEsm: HAST_MDX_ESM,
+};
+
+/**
+ * Selective walk path: Rust walks the tree, only sends matched nodes to JS.
+ * Used when all plugin subscriptions have filters.
+ */
+const textDecoder = new TextDecoder("utf-8");
+
+/** Read a matched element node from the binary data section into a HastNode. */
+function readElementFromBinary(
+  view: DataView,
+  buf: Uint8Array,
+  offset: number,
+  nodeId: number,
+): HastNode {
+  let pos = offset;
+
+  // tagName
+  const tagLen = view.getUint16(pos, true);
+  pos += 2;
+  const tagName = textDecoder.decode(buf.subarray(pos, pos + tagLen));
+  pos += tagLen;
+
+  // properties
+  const propCount = view.getUint16(pos, true);
+  pos += 2;
+  const properties: Record<string, string | boolean | string[]> = {};
+  for (let i = 0; i < propCount; i++) {
+    const nameLen = view.getUint16(pos, true);
+    pos += 2;
+    const name = textDecoder.decode(buf.subarray(pos, pos + nameLen));
+    pos += nameLen;
+    const kind = buf[pos]!;
+    pos += 1;
+    const valLen = view.getUint16(pos, true);
+    pos += 2;
+    const valStr = textDecoder.decode(buf.subarray(pos, pos + valLen));
+    pos += valLen;
+    switch (kind) {
+      case 0: // PROP_STRING
+        properties[name] = valStr;
+        break;
+      case 1: // PROP_BOOL_TRUE
+        properties[name] = true;
+        break;
+      case 2: // PROP_BOOL_FALSE
+        // skip false booleans (matches HastReader behavior)
+        break;
+      case 3: // PROP_SPACE_SEP
+        properties[name] = valStr.split(" ").filter((s) => s.length > 0);
+        break;
+    }
+  }
+
+  // Child IDs — stored as opaque markers so plugins can pass them through
+  const childCount = view.getUint16(pos, true);
+  pos += 2;
+  const children: { _nodeId: number; type: string }[] = [];
+  for (let i = 0; i < childCount; i++) {
+    const childId = view.getUint32(pos, true);
+    pos += 4;
+    children.push({ _nodeId: childId, type: "__child_ref__" });
+  }
+
+  const node = { type: "element" as const, tagName, properties, children } as unknown as HastNode;
+  Object.defineProperty(node, "_nodeId", {
+    value: nodeId,
+    writable: false,
+    configurable: true,
+    enumerable: false,
+  });
+  return node;
+}
+
+/** Read a text/comment/raw node from the binary data section. */
+const TEXT_NODE_TYPES: Record<number, string> = { 2: "text", 3: "comment", 5: "raw" };
+
+function readTextFromBinary(
+  view: DataView,
+  buf: Uint8Array,
+  offset: number,
+  nodeId: number,
+  nodeType: number,
+): HastNode {
+  const valLen = view.getUint32(offset, true);
+  const value = textDecoder.decode(buf.subarray(offset + 4, offset + 4 + valLen));
+  const node = { type: TEXT_NODE_TYPES[nodeType]!, value } as unknown as HastNode;
+  Object.defineProperty(node, "_nodeId", {
+    value: nodeId,
+    writable: false,
+    configurable: true,
+    enumerable: false,
+  });
+  return node;
+}
+
+/** Read an MDX JSX element from the binary data section. */
+function readMdxJsxFromBinary(
+  view: DataView,
+  buf: Uint8Array,
+  offset: number,
+  nodeId: number,
+  nodeType: number,
+): HastNode {
+  let pos = offset;
+
+  // Name
+  const nameLen = view.getUint16(pos, true);
+  pos += 2;
+  const name = nameLen > 0 ? textDecoder.decode(buf.subarray(pos, pos + nameLen)) : null;
+  pos += nameLen;
+
+  // Attributes: [kind: u8][nameLen: u16][name][valLen: u16][val]
+  const attrCount = view.getUint16(pos, true);
+  pos += 2;
+  const attributes: { type: string; name?: string; value: unknown }[] = [];
+  for (let i = 0; i < attrCount; i++) {
+    const kind = buf[pos]!;
+    pos += 1;
+    const attrNameLen = view.getUint16(pos, true);
+    pos += 2;
+    const attrName = textDecoder.decode(buf.subarray(pos, pos + attrNameLen));
+    pos += attrNameLen;
+    const attrValLen = view.getUint16(pos, true);
+    pos += 2;
+    const attrVal = textDecoder.decode(buf.subarray(pos, pos + attrValLen));
+    pos += attrValLen;
+
+    switch (kind) {
+      case 0: // BooleanProp
+        attributes.push({ type: "mdxJsxAttribute", name: attrName, value: null });
+        break;
+      case 1: // LiteralProp
+        attributes.push({ type: "mdxJsxAttribute", name: attrName, value: attrVal });
+        break;
+      case 2: // ExpressionProp
+        attributes.push({ type: "mdxJsxAttribute", name: attrName, value: { type: "mdxJsxAttributeValueExpression", value: attrVal } });
+        break;
+      case 3: // Spread
+        attributes.push({ type: "mdxJsxExpressionAttribute", value: attrVal });
+        break;
+    }
+  }
+
+  // Child IDs
+  const childCount = view.getUint16(pos, true);
+  pos += 2;
+  const children: { _nodeId: number; type: string }[] = [];
+  for (let i = 0; i < childCount; i++) {
+    children.push({ _nodeId: view.getUint32(pos, true), type: "__child_ref__" });
+    pos += 4;
+  }
+
+  const typeName = nodeType === HAST_MDX_JSX_ELEMENT ? "mdxJsxFlowElement" : "mdxJsxTextElement";
+  const node = { type: typeName, name, attributes, children } as unknown as HastNode;
+  Object.defineProperty(node, "_nodeId", {
+    value: nodeId,
+    writable: false,
+    configurable: true,
+    enumerable: false,
+  });
+  return node;
+}
+
+function readMatchedNode(
+  view: DataView,
+  buf: Uint8Array,
+  offset: number,
+  nodeId: number,
+  nodeType: number,
+): HastNode {
+  if (nodeType === HAST_ELEMENT) {
+    return readElementFromBinary(view, buf, offset, nodeId);
+  } else if (nodeType === HAST_TEXT || nodeType === HAST_COMMENT || nodeType === HAST_RAW) {
+    return readTextFromBinary(view, buf, offset, nodeId, nodeType);
+  } else if (nodeType === HAST_MDX_JSX_ELEMENT || nodeType === HAST_MDX_JSX_TEXT_ELEMENT) {
+    return readMdxJsxFromBinary(view, buf, offset, nodeId, nodeType);
+  }
+  // Fallback: minimal node
+  return { type: `unknown(${nodeType})`, _nodeId: nodeId } as unknown as HastNode;
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+/** Dispatch matched nodes from a binary match buffer to visitor functions. */
+function dispatchMatches(
+  matchBuf: Uint8Array,
+  subs: ResolvedSubscription[],
+  ctx: HastVisitorContextImpl,
+  returnBuffer: CommandBuffer,
+): void {
+  const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);
+  const matchCount = matchView.getUint32(0, true);
+
+  for (let i = 0; i < matchCount; i++) {
+    const indexBase = 4 + i * 12;
+    const nodeId = matchView.getUint32(indexBase, true);
+    const subIndex = matchBuf[indexBase + 4]!;
+    const dataOffset = matchView.getUint32(indexBase + 6, true);
+
+    const sub = subs[subIndex]!;
+    const node = readMatchedNode(matchView, matchBuf, dataOffset, nodeId, sub.nodeType);
+    const result = sub.visitFn(node, ctx);
+    if (result != null) {
+      returnBuffer.replaceRawJson(nodeId, JSON.stringify(markHast(result)));
+    }
+  }
+}
+
+/** Merge return-value + context command buffers and release internals. */
+function mergeAndReset(
+  returnBuffer: CommandBuffer,
+  ctx: HastVisitorContextImpl,
+): { merged: Uint8Array; hasMutations: boolean } {
+  const ctxCmdBuf = ctx.getCommandBuffer();
+  const ctxBuf = ctxCmdBuf.getBuffer();
+  const retBuf = returnBuffer.getBuffer();
+  const totalLen = retBuf.length + ctxBuf.length;
+
+  let merged: Uint8Array;
+  if (totalLen === 0) {
+    merged = new Uint8Array(0);
+  } else {
+    merged = new Uint8Array(totalLen);
+    merged.set(retBuf, 0);
+    merged.set(ctxBuf, retBuf.length);
+  }
+
+  returnBuffer.reset();
+  ctxCmdBuf.reset();
+  return { merged, hasMutations: totalLen > 0 };
+}
+
+// ---------------------------------------------------------------------------
+// Handle-based visitor (primary path)
+// ---------------------------------------------------------------------------
+
+/**
+ * Walk a handle's arena in Rust, dispatch matched nodes to JS visitor functions,
+ * and apply mutations back to the handle. No arena buffers cross NAPI.
+ */
+export function visitHastHandle(
+  handle: HastHandle,
+  plugin: HastVisitorInstance,
+  subs: ResolvedSubscription[],
+): void {
+  const ctx = new HastVisitorContextImpl();
+  const returnBuffer = new CommandBuffer();
+
+  plugin.before?.(ctx);
+
+  const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: s.tagFilter }));
+  dispatchMatches(walkHandle(handle, rustSubs), subs, ctx, returnBuffer);
+
+  plugin.after?.(ctx);
+
+  const { merged, hasMutations } = mergeAndReset(returnBuffer, ctx);
+  if (hasMutations) {
+    applyCommandsToHandle(handle, merged);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Buffer-based visitor (fallback for transformRoot / bare function plugins)
+// ---------------------------------------------------------------------------
 
 // Map from node_type number to visitor method name
 const TYPE_TO_METHOD: Record<number, keyof HastVisitorInstance> = {
@@ -322,9 +680,8 @@ const TYPE_TO_METHOD: Record<number, keyof HastVisitorInstance> = {
 };
 
 /**
- * Walk a HAST binary buffer and dispatch to visitor methods.
- *
- * Mutations are collected into a binary CommandBuffer (same as MDAST plugins).
+ * Buffer fallback: walk a HAST binary buffer in JS and dispatch to visitor methods.
+ * Used for transformRoot plugins and bare-function plugins that may return replacement nodes.
  */
 export function visitHast(
   reader: HastReader,
@@ -337,16 +694,13 @@ export function visitHast(
   plugin.before?.(ctx);
 
   if (typeof plugin.transformRoot === "function") {
-    // Full materialization path via transformRoot
     const root = materializeHastNode(reader, 0, dataMap);
     const result = plugin.transformRoot(root, ctx);
     if (result != null) {
       returnBuffer.replaceRawJson(0, JSON.stringify(markHast(result)));
     }
   } else {
-    // Fast path: walk raw bytes, only materialize on subscription match
     const stack: number[] = [0];
-
     while (stack.length > 0) {
       const nodeId = stack.pop()!;
       const nodeType = reader.getNodeType(nodeId);
@@ -371,28 +725,6 @@ export function visitHast(
 
   plugin.after?.(ctx);
 
-  // Merge: return-value commands first, then context commands
-  const ctxCmdBuf = ctx.getCommandBuffer();
-  const ctxBuf = ctxCmdBuf.getBuffer();
-  const retBuf = returnBuffer.getBuffer();
-  const totalLen = retBuf.length + ctxBuf.length;
-
-  let merged: Uint8Array;
-  if (totalLen === 0) {
-    merged = new Uint8Array(0);
-  } else {
-    merged = new Uint8Array(totalLen);
-    merged.set(retBuf, 0);
-    merged.set(ctxBuf, retBuf.length);
-  }
-
-  // Release internal ArrayBuffers now that we've copied into merged
-  returnBuffer.reset();
-  ctxCmdBuf.reset();
-
-  return {
-    commandBuffer: merged,
-    diagnostics: ctx.getDiagnostics(),
-    hasMutations: totalLen > 0,
-  };
+  const { merged, hasMutations } = mergeAndReset(returnBuffer, ctx);
+  return { commandBuffer: merged, diagnostics: ctx.getDiagnostics(), hasMutations };
 }

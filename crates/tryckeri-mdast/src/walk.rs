@@ -1,0 +1,401 @@
+//! Subscription-based tree walk.
+//!
+//! Walks the arena depth-first and collects nodes that match a set of
+//! subscriptions into a single flat binary buffer. JS reads this with
+//! DataView — no per-node object allocation.
+//!
+//! ## Result buffer format
+//!
+//! All integers are little-endian.
+//!
+//! ```text
+//! [match_count: u32]
+//! [match_index: match_count × 12 bytes]
+//!   per entry: [node_id: u32][subscription_index: u8][pad: u8][data_offset: u32][data_len: u16]
+//! [data section: variable length]
+//!   per matched node: inline resolved data (format depends on node type)
+//! ```
+//!
+//! ### Element data layout (node_type=1)
+//! ```text
+//! [tag_name_len: u16][tag_name: utf8...]
+//! [prop_count: u16]
+//! per prop:
+//!   [name_len: u16][name: utf8...][value_kind: u8][value_len: u16][value: utf8...]
+//! ```
+//!
+//! ### Text/comment/raw data layout (node_type=2,3,5)
+//! ```text
+//! [value_len: u32][value: utf8...]
+//! ```
+//!
+//! ### Code data layout (node_type=8)
+//! ```text
+//! [lang_len: u16][lang: utf8...][meta_len: u16][meta: utf8...][value_len: u32][value: utf8...]
+//! ```
+
+use crate::node::StringRef;
+use crate::read_arena::ReadMdast;
+
+/// A single subscription: match nodes of a given type, optionally filtered
+/// by tag name (for HAST element nodes).
+#[derive(Debug)]
+pub struct Subscription {
+    pub node_type: u8,
+    pub tag_filter: Vec<String>,
+}
+
+const HAST_ELEMENT_TYPE: u8 = 1;
+
+/// Walk the tree and return matched nodes as a flat binary buffer.
+///
+/// Returns a `Vec<u8>` containing the match index + inline data section.
+/// JS reads this with DataView — zero per-node object allocation.
+pub fn walk_and_collect(
+    arena: &dyn ReadMdast,
+    subscriptions: &[Subscription],
+) -> Vec<u8> {
+    if subscriptions.is_empty() {
+        return 0u32.to_le_bytes().to_vec();
+    }
+
+    // Build fast lookup: node_type → list of (subscription_index, tag_filter)
+    let mut type_subs: [Vec<(u8, &[String])>; 256] = std::array::from_fn(|_| Vec::new());
+    for (i, sub) in subscriptions.iter().enumerate() {
+        type_subs[sub.node_type as usize].push((i as u8, &sub.tag_filter));
+    }
+
+    // First pass: collect matches (node_id, sub_index) and serialize data
+    let mut matches: Vec<(u32, u8)> = Vec::new();
+    let mut data_section: Vec<u8> = Vec::new();
+    let mut data_offsets: Vec<(u32, u16)> = Vec::new(); // (offset, len) per match
+
+    let mut stack: Vec<u32> = vec![0];
+
+    while let Some(node_id) = stack.pop() {
+        let node = arena.get_node(node_id);
+        let node_type = node.node_type;
+
+        let subs = &type_subs[node_type as usize];
+        if !subs.is_empty() {
+            let type_data = arena.get_type_data(node_id);
+
+            // For elements with tag filter, read tag name once
+            let tag_name = if node_type == HAST_ELEMENT_TYPE && type_data.len() >= 8 {
+                let tag_ref = read_string_ref(type_data, 0);
+                Some(arena.get_str(tag_ref))
+            } else {
+                None
+            };
+
+            for &(sub_idx, tag_filter) in subs {
+                let matched = if tag_filter.is_empty() {
+                    true
+                } else if let Some(tag) = tag_name {
+                    tag_filter.iter().any(|f| f == tag)
+                } else {
+                    false
+                };
+
+                if matched {
+                    let data_start = data_section.len() as u32;
+                    serialize_node_inline(arena, node_id, node_type, type_data, &mut data_section);
+                    let data_len = (data_section.len() - data_start as usize) as u16;
+                    matches.push((node_id, sub_idx));
+                    data_offsets.push((data_start, data_len));
+                }
+            }
+        }
+
+        // Push children in reverse for depth-first order
+        let children = arena.get_children(node_id);
+        for &child_id in children.iter().rev() {
+            stack.push(child_id);
+        }
+    }
+
+    // Build output buffer: [count][index entries][data section]
+    let match_count = matches.len() as u32;
+    let index_size = match_count as usize * 12;
+    let header_size = 4; // match_count
+    let total = header_size + index_size + data_section.len();
+
+    let mut out = Vec::with_capacity(total);
+
+    // Header
+    out.extend_from_slice(&match_count.to_le_bytes());
+
+    // Index entries — adjust data_offset to account for header + index
+    let data_base = (header_size + index_size) as u32;
+    for i in 0..matches.len() {
+        let (node_id, sub_idx) = matches[i];
+        let (offset, len) = data_offsets[i];
+        out.extend_from_slice(&node_id.to_le_bytes());
+        out.push(sub_idx);
+        out.push(0); // pad
+        out.extend_from_slice(&(data_base + offset).to_le_bytes());
+        out.extend_from_slice(&len.to_le_bytes());
+    }
+
+    // Data section
+    out.extend_from_slice(&data_section);
+
+    out
+}
+
+fn read_string_ref(data: &[u8], offset: usize) -> StringRef {
+    StringRef::new(
+        u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap()),
+        u32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap()),
+    )
+}
+
+/// Write inline node data with all strings resolved (no StringRefs).
+/// Element data includes child node IDs so plugins can reference them.
+fn serialize_node_inline(
+    arena: &dyn ReadMdast,
+    node_id: u32,
+    node_type: u8,
+    type_data: &[u8],
+    out: &mut Vec<u8>,
+) {
+    match node_type {
+        // HAST element
+        1 => {
+            if type_data.len() < 16 {
+                out.extend_from_slice(&0u16.to_le_bytes()); // empty tag
+                out.extend_from_slice(&0u16.to_le_bytes()); // 0 props
+                out.extend_from_slice(&0u16.to_le_bytes()); // 0 children
+                return;
+            }
+            // Tag name
+            let tag_ref = read_string_ref(type_data, 0);
+            let tag = arena.get_str(tag_ref);
+            out.extend_from_slice(&(tag.len() as u16).to_le_bytes());
+            out.extend_from_slice(tag.as_bytes());
+
+            // Properties
+            let prop_count = u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
+            out.extend_from_slice(&(prop_count as u16).to_le_bytes());
+            for i in 0..prop_count {
+                let base = 16 + i * 20;
+                let name_ref = read_string_ref(type_data, base);
+                let kind = type_data[base + 8];
+                let val_ref = read_string_ref(type_data, base + 12);
+                let name = arena.get_str(name_ref);
+                out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+                out.extend_from_slice(name.as_bytes());
+                out.push(kind);
+                let val = arena.get_str(val_ref);
+                out.extend_from_slice(&(val.len() as u16).to_le_bytes());
+                out.extend_from_slice(val.as_bytes());
+            }
+
+            // Child IDs
+            let children = arena.get_children(node_id);
+            out.extend_from_slice(&(children.len() as u16).to_le_bytes());
+            for &child_id in children {
+                out.extend_from_slice(&child_id.to_le_bytes());
+            }
+        }
+
+        // MDX JSX elements (flow=10, text=11) — same layout as HAST element
+        // but uses name + attributes instead of tagName + properties
+        10 | 11 => {
+            if type_data.len() < 16 {
+                out.extend_from_slice(&0u16.to_le_bytes()); // empty name
+                out.extend_from_slice(&0u16.to_le_bytes()); // 0 attrs
+                out.extend_from_slice(&0u16.to_le_bytes()); // 0 children
+                return;
+            }
+            // Name
+            let name_ref = read_string_ref(type_data, 0);
+            let name = arena.get_str(name_ref);
+            out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            out.extend_from_slice(name.as_bytes());
+
+            // Attributes: [kind: u8][_pad: 3B][name: StringRef(8B)][value: StringRef(8B)]
+            let attr_count = u32::from_le_bytes(type_data[8..12].try_into().unwrap()) as usize;
+            out.extend_from_slice(&(attr_count as u16).to_le_bytes());
+            for i in 0..attr_count {
+                let base = 16 + i * 20;
+                let kind = type_data[base];
+                let attr_name_ref = read_string_ref(type_data, base + 4);
+                let attr_val_ref = read_string_ref(type_data, base + 12);
+                let attr_name = arena.get_str(attr_name_ref);
+                let attr_val = arena.get_str(attr_val_ref);
+                out.push(kind);
+                out.extend_from_slice(&(attr_name.len() as u16).to_le_bytes());
+                out.extend_from_slice(attr_name.as_bytes());
+                out.extend_from_slice(&(attr_val.len() as u16).to_le_bytes());
+                out.extend_from_slice(attr_val.as_bytes());
+            }
+
+            // Child IDs
+            let children = arena.get_children(node_id);
+            out.extend_from_slice(&(children.len() as u16).to_le_bytes());
+            for &child_id in children {
+                out.extend_from_slice(&child_id.to_le_bytes());
+            }
+        }
+
+        // HAST text / comment / raw
+        2 | 3 | 5 => {
+            if type_data.len() >= 8 {
+                let val_ref = read_string_ref(type_data, 0);
+                let val = arena.get_str(val_ref);
+                out.extend_from_slice(&(val.len() as u32).to_le_bytes());
+                out.extend_from_slice(val.as_bytes());
+            } else {
+                out.extend_from_slice(&0u32.to_le_bytes());
+            }
+        }
+
+        // MDAST code (type 8)
+        8 => {
+            if type_data.len() >= 24 {
+                let lang_ref = read_string_ref(type_data, 0);
+                let meta_ref = read_string_ref(type_data, 8);
+                let val_ref = read_string_ref(type_data, 16);
+                let lang = arena.get_str(lang_ref);
+                let meta = arena.get_str(meta_ref);
+                let val = arena.get_str(val_ref);
+                out.extend_from_slice(&(lang.len() as u16).to_le_bytes());
+                out.extend_from_slice(lang.as_bytes());
+                out.extend_from_slice(&(meta.len() as u16).to_le_bytes());
+                out.extend_from_slice(meta.as_bytes());
+                out.extend_from_slice(&(val.len() as u32).to_le_bytes());
+                out.extend_from_slice(val.as_bytes());
+            } else {
+                out.extend_from_slice(&[0u8; 8]); // empty lang, meta, value
+            }
+        }
+
+        // MDAST heading (type 2 in MDAST context)
+        // depth is a single u8
+        _ => {
+            // Generic: just copy raw type_data
+            out.extend_from_slice(&(type_data.len() as u16).to_le_bytes());
+            out.extend_from_slice(type_data);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::MdastBuilder;
+
+    fn build_hast_with_elements(tags: &[&str]) -> crate::MdastArena {
+        let mut b = MdastBuilder::new(String::new());
+        b.open_node_raw(0); // HAST root
+        for tag in tags {
+            b.open_node_raw(1); // HAST element
+            let tag_ref = b.alloc_string(tag);
+            let mut type_data = Vec::with_capacity(16);
+            type_data.extend_from_slice(&tag_ref.offset.to_le_bytes());
+            type_data.extend_from_slice(&tag_ref.len.to_le_bytes());
+            type_data.extend_from_slice(&0u32.to_le_bytes()); // prop_count
+            type_data.extend_from_slice(&0u32.to_le_bytes()); // pad
+            b.set_data_current(&type_data);
+            // text child
+            b.open_node_raw(2);
+            let val_ref = b.alloc_string("hello");
+            let mut td = [0u8; 8];
+            td[0..4].copy_from_slice(&val_ref.offset.to_le_bytes());
+            td[4..8].copy_from_slice(&val_ref.len.to_le_bytes());
+            b.set_data_current(&td);
+            b.close_node();
+            b.close_node();
+        }
+        b.close_node();
+        b.finish()
+    }
+
+    fn read_match_count(buf: &[u8]) -> u32 {
+        u32::from_le_bytes(buf[0..4].try_into().unwrap())
+    }
+
+    fn read_match_node_id(buf: &[u8], index: usize) -> u32 {
+        let offset = 4 + index * 12;
+        u32::from_le_bytes(buf[offset..offset + 4].try_into().unwrap())
+    }
+
+    fn read_match_sub_index(buf: &[u8], index: usize) -> u8 {
+        buf[4 + index * 12 + 4]
+    }
+
+    #[test]
+    fn walk_no_subscriptions() {
+        let arena = build_hast_with_elements(&["div", "a", "p"]);
+        let buf = walk_and_collect(&arena, &[]);
+        assert_eq!(read_match_count(&buf), 0);
+    }
+
+    #[test]
+    fn walk_match_all_elements() {
+        let arena = build_hast_with_elements(&["div", "a", "p"]);
+        let subs = vec![Subscription {
+            node_type: 1,
+            tag_filter: vec![],
+        }];
+        let buf = walk_and_collect(&arena, &subs);
+        assert_eq!(read_match_count(&buf), 3);
+    }
+
+    #[test]
+    fn walk_filter_by_tag() {
+        let arena = build_hast_with_elements(&["div", "a", "p", "a", "img"]);
+        let subs = vec![Subscription {
+            node_type: 1,
+            tag_filter: vec!["a".into(), "img".into()],
+        }];
+        let buf = walk_and_collect(&arena, &subs);
+        assert_eq!(read_match_count(&buf), 3); // two <a> + one <img>
+    }
+
+    #[test]
+    fn walk_multiple_subscriptions() {
+        let arena = build_hast_with_elements(&["div", "a", "p"]);
+        let subs = vec![
+            Subscription {
+                node_type: 1,
+                tag_filter: vec!["a".into()],
+            },
+            Subscription {
+                node_type: 2, // HAST_TEXT
+                tag_filter: vec![],
+            },
+        ];
+        let buf = walk_and_collect(&arena, &subs);
+        // 1 <a> element + 3 text nodes = 4
+        assert_eq!(read_match_count(&buf), 4);
+        // First match: text inside div (sub_index=1)
+        assert_eq!(read_match_sub_index(&buf, 0), 1);
+        // Second match: <a> element (sub_index=0)
+        assert_eq!(read_match_sub_index(&buf, 1), 0);
+    }
+
+    #[test]
+    fn element_data_contains_tag_name() {
+        let arena = build_hast_with_elements(&["a"]);
+        let subs = vec![Subscription {
+            node_type: 1,
+            tag_filter: vec![],
+        }];
+        let buf = walk_and_collect(&arena, &subs);
+        assert_eq!(read_match_count(&buf), 1);
+        // Read data offset and len from index
+        let data_offset =
+            u32::from_le_bytes(buf[4 + 6..4 + 10].try_into().unwrap()) as usize;
+        let data_len =
+            u16::from_le_bytes(buf[4 + 10..4 + 12].try_into().unwrap()) as usize;
+        assert!(data_len > 0);
+        // First 2 bytes of data = tag_name_len
+        let tag_len =
+            u16::from_le_bytes(buf[data_offset..data_offset + 2].try_into().unwrap()) as usize;
+        assert_eq!(tag_len, 1); // "a"
+        let tag = std::str::from_utf8(&buf[data_offset + 2..data_offset + 2 + tag_len]).unwrap();
+        assert_eq!(tag, "a");
+    }
+}
