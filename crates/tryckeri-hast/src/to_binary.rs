@@ -149,7 +149,12 @@ fn copy_position(node_id: u32, view: &dyn ReadMdast, builder: &mut MdastBuilder)
     }
 }
 
-fn convert_node(node_id: u32, view: &dyn ReadMdast, builder: &mut MdastBuilder, defs: &[Definition]) {
+fn convert_node(
+    node_id: u32,
+    view: &dyn ReadMdast,
+    builder: &mut MdastBuilder,
+    defs: &[Definition],
+) {
     let node = view.get_node(node_id);
     let raw_type = node.node_type;
 

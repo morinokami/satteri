@@ -72,11 +72,7 @@ function lazyProp<T>(key: string, get: () => T): PropertyDescriptor {
  * Uses a shared resolve-once pattern: the first getter to fire reads all data,
  * defines own properties for every key, then each per-key getter returns its value.
  */
-function lazyGroup(
-  node: MdastNode,
-  keys: string[],
-  resolve: () => Record<string, unknown>,
-): void {
+function lazyGroup(node: MdastNode, keys: string[], resolve: () => Record<string, unknown>): void {
   let cached: Record<string, unknown> | undefined;
   const ensureResolved = () => {
     if (cached) return cached;
@@ -151,7 +147,8 @@ function addTypeProperties(
       lazyGroup(node, ["url", "alt", "title"], () => reader.getImageData(nodeId));
       break;
 
-    case 5: { // list
+    case 5: {
+      // list
       const resolveList = () => {
         const d = reader.getListData(nodeId);
         return { ordered: d.ordered, start: d.ordered ? d.start : null, spread: d.spread };

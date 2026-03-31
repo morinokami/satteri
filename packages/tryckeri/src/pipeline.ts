@@ -44,7 +44,11 @@ interface RunResult {
 export function runPluginsOnBuffer(
   buffer: ArrayBuffer | Uint8Array,
   pluginInstances: { instance: ReturnType<MdastPluginDefinition["createOnce"]>; name: string }[],
-  { filename = "<unknown>", dataMap, deferLast = false }: { filename?: string; dataMap?: DataMap; deferLast?: boolean } = {},
+  {
+    filename = "<unknown>",
+    dataMap,
+    deferLast = false,
+  }: { filename?: string; dataMap?: DataMap; deferLast?: boolean } = {},
 ): RunResult {
   const dm = dataMap ?? new DataMap();
   const allMdastDiagnostics: MdastDiagnostic[] = [];
