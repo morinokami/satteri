@@ -10,6 +10,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "pnpm-lock.yaml"
+      - ".github/workflows/benchmark.yml"
   pull_request:
     paths:
       - "crates/**"
@@ -17,7 +18,12 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "pnpm-lock.yaml"
+      - ".github/workflows/benchmark.yml"
   workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -42,10 +48,10 @@ jobs:
         run: cargo codspeed build -p satteri-bench
 
       - name: Run the benchmarks
-        uses: CodSpeedHQ/action@v3
+        uses: CodSpeedHQ/action@v4
         with:
+          mode: simulation
           run: cargo codspeed run -p satteri-bench
-          token: ${{ secrets.CODSPEED_TOKEN }}
 
   js-benchmarks:
     name: JS benchmarks
@@ -88,8 +94,8 @@ jobs:
         working-directory: packages/satteri
 
       - name: Run the benchmarks
-        uses: CodSpeedHQ/action@v3
+        uses: CodSpeedHQ/action@v4
         with:
+          mode: simulation
           run: pnpm run bench
           working-directory: packages/satteri
-          token: ${{ secrets.CODSPEED_TOKEN }}

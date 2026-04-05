@@ -1,5 +1,7 @@
 # Sätteri
 
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://codspeed.io/bruits/satteri?utm_source=badge)
+
 High-performance Markdown and MDX processing. Powered by a Rust arena backend with zero-copy binary transfer to JavaScript, and a plugin system for custom transformations.
 
 Don't know where to start? Check out our npm package's [ documentation](./packages/satteri/README.md).
