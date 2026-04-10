@@ -66,7 +66,6 @@ const hastPluginTab = $<HTMLButtonElement>('[data-input-tab="hast-plugin"]');
 
 let currentMode: Mode = "markdown";
 let activeTab: Tab = "mdast";
-let debounceTimer: ReturnType<typeof setTimeout>;
 let compileGeneration = 0;
 let highlighter: HighlighterCore | null = null;
 
@@ -402,8 +401,7 @@ function escapeHtml(s: string): string {
 }
 
 function scheduleCompile() {
-  clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(compile, 150);
+  compile();
 }
 
 // Input tab clicks

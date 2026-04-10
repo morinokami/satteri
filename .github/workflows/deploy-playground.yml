@@ -1,0 +1,68 @@
+name: Deploy Playground
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "playground/**"
+      - "packages/satteri/**"
+      - "crates/satteri-napi-binding/**"
+      - ".github/workflows/deploy-playground.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: "!contains(github.event.head_commit.message, '[skip cd]')"
+    runs-on: ubuntu-latest
+    name: Deploy
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: latest
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1-threads
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: rust-playground-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build WASM binding
+        run: pnpm build:wasm
+        working-directory: packages/satteri
+
+      - name: Build TypeScript
+        run: pnpm build:ts
+        working-directory: packages/satteri
+
+      - name: Build Playground
+        run: pnpm build
+        working-directory: playground
+
+      - name: Deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          workingDirectory: ./playground
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
