@@ -300,7 +300,7 @@ impl<'input, CB: ParserCallbacks<'input>> Parser<'input, CB> {
     ///
     /// See the [`ParserCallbacks`] trait for a list of callbacks that can be overridden.
     pub fn new_with_callbacks(text: &'input str, options: Options, callbacks: CB) -> Self {
-        let (mut tree, allocs) = run_first_pass(text, options);
+        let (mut tree, allocs, _firstpass_mdx_errors) = run_first_pass(text, options);
         tree.reset();
         let inline_stack = Default::default();
         let link_stack = Default::default();
@@ -370,7 +370,7 @@ impl<'input, F> Parser<'input, BrokenLinkCallback<F>> {
 
 impl<'input> ParserInner<'input> {
     pub(crate) fn new(text: &'input str, options: Options) -> Self {
-        let (mut tree, allocs) = run_first_pass(text, options);
+        let (mut tree, allocs, firstpass_mdx_errors) = run_first_pass(text, options);
         tree.reset();
         ParserInner {
             text,
@@ -382,7 +382,7 @@ impl<'input> ParserInner<'input> {
             wikilink_stack: Default::default(),
             html_scan_guard: Default::default(),
             link_ref_expansion_limit: text.len().max(100_000),
-            mdx_errors: Vec::new(),
+            mdx_errors: firstpass_mdx_errors,
             code_delims: CodeDelims::new(),
             math_delims: MathDelims::new(),
         }

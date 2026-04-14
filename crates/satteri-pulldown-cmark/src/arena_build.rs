@@ -815,12 +815,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         let sr = builder.alloc_string(&cow);
                         builder.add_leaf_full(
                             MdastNodeType::MdxFlowExpression as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            start, end, start_line, start_col, end_line, end_col,
                             &ExpressionData { value: sr }.to_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -830,12 +825,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         let sr = builder.alloc_string(&cow);
                         builder.add_leaf_full(
                             MdastNodeType::MdxTextExpression as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            start, end, start_line, start_col, end_line, end_col,
                             &ExpressionData { value: sr }.to_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -845,12 +835,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         let sr = builder.alloc_string(&cow);
                         builder.add_leaf_full(
                             MdastNodeType::MdxjsEsm as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
+                            start, end, start_line, start_col, end_line, end_col,
                             &ExpressionData { value: sr }.to_bytes(),
                         );
                         inner.tree.next_sibling(cur_ix);
@@ -911,7 +896,9 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
 
     // Close root.
     builder.close_node();
-    (builder.finish(), mdx_errors)
+    let mut arena = builder.finish();
+    arena.parse_options = options.bits();
+    (arena, mdx_errors)
 }
 
 fn heading_level_to_u8(level: HeadingLevel) -> u8 {

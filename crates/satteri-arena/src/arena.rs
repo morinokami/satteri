@@ -19,6 +19,9 @@ pub struct Arena {
     pub node_data: FxHashMap<u32, Vec<u8>>,
     /// Whether this arena was parsed in MDX mode.
     pub mdx: bool,
+    /// The pulldown-cmark Options bits used to parse this arena.
+    /// Stored so that re-parsing (e.g. after plugin mutations) uses the same options.
+    pub parse_options: u32,
 }
 
 impl Arena {
@@ -30,6 +33,7 @@ impl Arena {
             source,
             node_data: FxHashMap::default(),
             mdx: false,
+            parse_options: 0,
         }
     }
 
@@ -47,6 +51,7 @@ impl Arena {
             source,
             node_data: FxHashMap::default(),
             mdx: false,
+            parse_options: 0,
         }
     }
 

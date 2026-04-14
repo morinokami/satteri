@@ -23,6 +23,47 @@
           </label>
         </fieldset>
 
+        <fieldset id="features-fieldset">
+          <legend>Features</legend>
+          <label><input type="checkbox" id="feat-gfm" checked /> GFM</label>
+          <label><input type="checkbox" id="feat-frontmatter" checked /> Frontmatter</label>
+          <label><input type="checkbox" id="feat-math" checked /> Math</label>
+          <label><input type="checkbox" id="feat-heading-attributes" checked /> Heading attributes</label>
+          <label><input type="checkbox" id="feat-directive" /> Directive</label>
+          <label><input type="checkbox" id="feat-superscript" /> Superscript</label>
+          <label><input type="checkbox" id="feat-subscript" /> Subscript</label>
+          <label><input type="checkbox" id="feat-wikilinks" /> Wikilinks</label>
+          <label><input type="checkbox" id="feat-smart-punctuation" /> Smart punctuation</label>
+          <label><input type="checkbox" id="feat-definition-list" /> Definition list</label>
+        </fieldset>
+
+        <fieldset id="mdx-options-fieldset" class="hidden">
+          <legend>MDX Options</legend>
+          <label>
+            jsxImportSource
+            <input type="text" id="mdx-jsx-import-source" value="" placeholder="react (default)" />
+          </label>
+          <label>
+            jsxRuntime
+            <select id="mdx-jsx-runtime">
+              <option value="automatic" selected>automatic</option>
+              <option value="classic">classic</option>
+            </select>
+          </label>
+          <label>
+            <input type="checkbox" id="mdx-jsx" />
+            jsx (keep JSX)
+          </label>
+          <label>
+            <input type="checkbox" id="mdx-development" />
+            development
+          </label>
+          <label>
+            providerImportSource
+            <input type="text" id="mdx-provider-import-source" value="" placeholder="none" />
+          </label>
+        </fieldset>
+
         <fieldset id="optimize-static-fieldset">
           <legend>optimizeStatic</legend>
           <label>

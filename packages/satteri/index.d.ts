@@ -16,7 +16,7 @@ export declare function applyCommandsToMdastHandle(handle: ArenaHandle, commandB
 export declare function compileHandle(handle: ArenaHandle, options?: JsMdxOptions | undefined | null): string
 
 /** Compile MDX source directly to JavaScript. */
-export declare function compileMdx(source: string, options?: JsMdxOptions | undefined | null): string
+export declare function compileMdx(source: string, options?: JsMdxOptions | undefined | null, features?: JsFeatures | undefined | null): string
 
 /** Convert an MDAST handle to a HAST handle. The MDAST handle is consumed (emptied). */
 export declare function convertMdastToHastHandle(handle: ArenaHandle): ArenaHandle
@@ -25,16 +25,16 @@ export declare function convertMdastToHastHandle(handle: ArenaHandle): ArenaHand
  * Parse markdown source and convert to HAST. Returns an opaque handle.
  * The arena stays in Rust memory, no buffer is copied to JS.
  */
-export declare function createHastHandle(source: string): ArenaHandle
+export declare function createHastHandle(source: string, features?: JsFeatures | undefined | null): ArenaHandle
 
 /** Parse markdown source into an MDAST arena handle. */
-export declare function createMdastHandle(source: string): ArenaHandle
+export declare function createMdastHandle(source: string, features?: JsFeatures | undefined | null): ArenaHandle
 
 /** Parse MDX source and convert to HAST. Returns an opaque handle. */
-export declare function createMdxHastHandle(source: string): ArenaHandle
+export declare function createMdxHastHandle(source: string, features?: JsFeatures | undefined | null): ArenaHandle
 
 /** Parse MDX source into an MDAST arena handle. */
-export declare function createMdxMdastHandle(source: string): ArenaHandle
+export declare function createMdxMdastHandle(source: string, features?: JsFeatures | undefined | null): ArenaHandle
 
 /**
  * Release the arena memory held by a handle. The handle becomes empty
@@ -48,6 +48,33 @@ export declare function getHandleSource(handle: ArenaHandle): string
 /** Read the node_data JSON blob for a node. Returns null if none is set. */
 export declare function getNodeData(handle: ArenaHandle, nodeId: number): string | null
 
+/** Feature toggles for the Markdown/MDX parser, passed from JavaScript. */
+export interface JsFeatures {
+  /**
+   * GFM: tables, footnotes, strikethrough, task lists, blockquote tags.
+   * Default: true.
+   */
+  gfm?: boolean
+  /** Frontmatter: YAML (`--- ... ---`) and TOML (`+++ ... +++`). Default: true. */
+  frontmatter?: boolean
+  /** Math blocks and inline math (`$$ ... $$`, `$ ... $`). Default: true. */
+  math?: boolean
+  /** Heading attributes (`# text { #id .class }`). Default: true. */
+  headingAttributes?: boolean
+  /** Colon-delimited container directive blocks (`:::`). Default: false. */
+  directive?: boolean
+  /** Superscript (`^super^`). Default: false. */
+  superscript?: boolean
+  /** Subscript (`~sub~`). Default: false. */
+  subscript?: boolean
+  /** Obsidian-style wikilinks (`[[link]]`). Default: false. */
+  wikilinks?: boolean
+  /** Smart punctuation (ligatures, smart quotes). Default: false. */
+  smartPunctuation?: boolean
+  /** Definition lists. Default: false. */
+  definitionList?: boolean
+}
+
 /** MDX compile options passed from JavaScript. */
 export interface JsMdxOptions {
   /**
@@ -55,6 +82,28 @@ export interface JsMdxOptions {
    * into raw HTML strings using the specified component and prop.
    */
   optimizeStatic?: JsOptimizeStaticConfig
+  /**
+   * Place to import automatic JSX runtimes from (e.g. "react", "preact").
+   * Default: "react".
+   */
+  jsxImportSource?: string
+  /** Whether to keep JSX instead of compiling it away. Default: false. */
+  jsx?: boolean
+  /** JSX runtime: "automatic" (default) or "classic". */
+  jsxRuntime?: string
+  /**
+   * Whether to add extra info to error messages and use the development
+   * JSX runtime. Default: false.
+   */
+  development?: boolean
+  /** Place to import a provider from (e.g. "@mdx-js/react"). */
+  providerImportSource?: string
+  /** Pragma for JSX in classic runtime (default: "React.createElement"). */
+  pragma?: string
+  /** Pragma for JSX fragments in classic runtime (default: "React.Fragment"). */
+  pragmaFrag?: string
+  /** Where to import the pragma from in classic runtime (default: "react"). */
+  pragmaImportSource?: string
 }
 
 /** Static optimization config passed from JavaScript. */
@@ -99,7 +148,7 @@ export declare function parseExpression(source: string): string | null
  * Parse Markdown source and return HTML string directly.
  * Uses pulldown-cmark's streaming renderer, skipping the arena entirely.
  */
-export declare function parseToHtml(source: string): string
+export declare function parseToHtml(source: string, features?: JsFeatures | undefined | null): string
 
 /** Render a handle's HAST arena to HTML. Does not consume the handle. */
 export declare function renderHandle(handle: ArenaHandle): string

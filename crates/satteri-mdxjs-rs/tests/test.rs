@@ -2,10 +2,12 @@ extern crate satteri_mdxjs;
 use pretty_assertions::assert_eq;
 use satteri_mdxjs::{JsxRuntime, OptimizeStaticConfig, Options, compile};
 
+const MDX_OPTS: satteri_pulldown_cmark::Options = satteri_pulldown_cmark::MDX_OPTIONS;
+
 #[test]
 fn simple() -> Result<(), satteri_arena::mdx_types::Message> {
     assert_eq!(
-        compile("", &Options::default())?,
+        compile("", &Options::default(), MDX_OPTS)?,
         "import { Fragment as _Fragment, jsx as _jsx } from \"react/jsx-runtime\";
 function _createMdxContent(props) {
     return _jsx(_Fragment, {});
@@ -29,7 +31,7 @@ fn development() -> Result<(), satteri_arena::mdx_types::Message> {
             development: true,
             filepath: Some("example.mdx".into()),
             ..Default::default()
-        })?,
+        }, MDX_OPTS)?,
         "import { jsxDEV as _jsxDEV } from \"react/jsx-dev-runtime\";
 function _createMdxContent(props) {
     const { A } = props.components || {};
@@ -61,7 +63,7 @@ fn provider() -> Result<(), satteri_arena::mdx_types::Message> {
         compile("<A />",  &Options {
             provider_import_source: Some("@mdx-js/react".into()),
             ..Default::default()
-        })?,
+        }, MDX_OPTS)?,
         "import { jsx as _jsx } from \"react/jsx-runtime\";
 import { useMDXComponents as _provideComponents } from \"@mdx-js/react\";
 function _createMdxContent(props) {
@@ -90,7 +92,7 @@ fn jsx() -> Result<(), satteri_arena::mdx_types::Message> {
         compile("", &Options {
             jsx: true,
             ..Default::default()
-        })?,
+        }, MDX_OPTS)?,
         "function _createMdxContent(props) {
     return <></>;
 }
@@ -112,7 +114,7 @@ fn classic() -> Result<(), satteri_arena::mdx_types::Message> {
         compile("", &Options {
             jsx_runtime: Some(JsxRuntime::Classic),
             ..Default::default()
-        })?,
+        }, MDX_OPTS)?,
         "import React from \"react\";
 function _createMdxContent(props) {
     return React.createElement(React.Fragment);
@@ -137,7 +139,8 @@ fn import_source() -> Result<(), satteri_arena::mdx_types::Message> {
             &Options {
                 jsx_import_source: Some("preact".into()),
                 ..Default::default()
-            }
+            },
+            MDX_OPTS,
         )?,
         "import { Fragment as _Fragment, jsx as _jsx } from \"preact/jsx-runtime\";
 function _createMdxContent(props) {
@@ -164,7 +167,7 @@ fn pragmas() -> Result<(), satteri_arena::mdx_types::Message> {
             pragma_frag: Some("a.c".into()),
             pragma_import_source: Some("d".into()),
             ..Default::default()
-        })?,
+        }, MDX_OPTS)?,
         "import a from \"d\";
 function _createMdxContent(props) {
     return a.b(a.c);
@@ -183,7 +186,7 @@ export default MDXContent;
 
 #[test]
 fn unravel_elements() -> Result<(), satteri_arena::mdx_types::Message> {
-    let result = compile("<x>a</x>\n<x>\n  b\n</x>\n", &Default::default())?;
+    let result = compile("<x>a</x>\n<x>\n  b\n</x>\n", &Default::default(), MDX_OPTS)?;
     // Must produce valid JS with both <x> elements.
     assert!(
         result.contains("\"x\""),
@@ -201,7 +204,7 @@ fn unravel_elements() -> Result<(), satteri_arena::mdx_types::Message> {
 #[test]
 fn unravel_expressions() -> Result<(), satteri_arena::mdx_types::Message> {
     assert_eq!(
-        compile("{1} {2}", &Default::default())?,
+        compile("{1} {2}", &Default::default(), MDX_OPTS)?,
         "import { Fragment as _Fragment, jsx as _jsx, jsxs as _jsxs } from \"react/jsx-runtime\";
 function _createMdxContent(props) {
     return _jsxs(_Fragment, { children: [
@@ -231,7 +234,8 @@ fn explicit_jsx() -> Result<(), satteri_arena::mdx_types::Message> {
             "<h1>asd</h1>
 # qwe
 ",
-            &Default::default()
+            &Default::default(),
+            MDX_OPTS,
         )?,
         "import { Fragment as _Fragment, jsx as _jsx, jsxs as _jsxs } from \"react/jsx-runtime\";
 function _createMdxContent(props) {
@@ -259,7 +263,7 @@ export default MDXContent;
 #[test]
 fn optimize_static_default_off() -> Result<(), satteri_arena::mdx_types::Message> {
     // With no optimize_static, output should contain _jsx("h1", ...) calls.
-    let result = compile("# Hello\n\nWorld", &Options::default())?;
+    let result = compile("# Hello\n\nWorld", &Options::default(), MDX_OPTS)?;
     assert!(
         result.contains("\"h1\""),
         "should have h1 element call: {result}"
@@ -279,6 +283,7 @@ fn optimize_static_astro_style() -> Result<(), satteri_arena::mdx_types::Message
             optimize_static: Some(OptimizeStaticConfig::default()),
             ..Default::default()
         },
+        MDX_OPTS,
     )?;
     // Should contain set:html with serialized HTML
     assert!(
@@ -314,6 +319,7 @@ fn optimize_static_react_style() -> Result<(), satteri_arena::mdx_types::Message
             }),
             ..Default::default()
         },
+        MDX_OPTS,
     )?;
     assert!(
         result.contains("dangerouslySetInnerHTML"),
@@ -336,6 +342,7 @@ fn optimize_static_mixed_dynamic() -> Result<(), satteri_arena::mdx_types::Messa
             optimize_static: Some(OptimizeStaticConfig::default()),
             ..Default::default()
         },
+        MDX_OPTS,
     )?;
     assert!(
         result.contains("set:html"),
@@ -360,6 +367,7 @@ fn optimize_static_ignore_elements() -> Result<(), satteri_arena::mdx_types::Mes
             }),
             ..Default::default()
         },
+        MDX_OPTS,
     )?;
     // h1 should NOT be collapsed (it's in ignore list), but p should be
     assert!(
@@ -383,6 +391,7 @@ fn optimize_static_sibling_grouping() -> Result<(), satteri_arena::mdx_types::Me
             optimize_static: Some(OptimizeStaticConfig::default()),
             ..Default::default()
         },
+        MDX_OPTS,
     )?;
     // All three headings should be in a single set:html
     assert!(result.contains("<h1>A</h1>"), "should contain h1: {result}");
@@ -404,6 +413,7 @@ fn optimize_static_nested_dynamic_prevents_collapse()
             optimize_static: Some(OptimizeStaticConfig::default()),
             ..Default::default()
         },
+        MDX_OPTS,
     )?;
     // The h1 should be collapsed (static)
     assert!(

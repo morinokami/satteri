@@ -1145,6 +1145,9 @@ version = "0.1.1"
 dependencies = [
  "bitflags",
  "memchr",
+ "oxc_allocator",
+ "oxc_parser",
+ "oxc_span",
  "pulldown-cmark-escape",
  "rustc-hash",
  "satteri-arena",

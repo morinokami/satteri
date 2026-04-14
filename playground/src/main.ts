@@ -1,4 +1,5 @@
 import {
+  type Features,
   type MdxCompileOptions,
   type MdastPluginDefinition,
   type HastPluginDefinition,
@@ -19,7 +20,6 @@ import {
   visitHastHandle,
   resolveHastSubscriptions,
   applyCommandsToMdastHandle,
-  applyCommandsAndConvertToHastHandle,
   getHandleSource,
 } from "satteri";
 import { createHighlighterCore, type HighlighterCore } from "shiki/core";
@@ -35,8 +35,7 @@ type Mode = "markdown" | "mdx";
 type Tab = "mdast" | "hast" | "output" | "rendered";
 type InputTab = "source" | "mdast-plugin" | "hast-plugin";
 
-const $ = <T extends HTMLElement>(sel: string) =>
-  document.querySelector<T>(sel)!;
+const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 
 const input = $<HTMLTextAreaElement>("#input");
 const inputMdastPlugin = $<HTMLTextAreaElement>("#input-mdast-plugin");
@@ -63,6 +62,22 @@ const renderedTabButton = $<HTMLButtonElement>('[data-tab="rendered"]');
 const statusBar = $<HTMLElement>("#status-bar");
 const mdastPluginTab = $<HTMLButtonElement>('[data-input-tab="mdast-plugin"]');
 const hastPluginTab = $<HTMLButtonElement>('[data-input-tab="hast-plugin"]');
+const mdxOptionsFieldset = $<HTMLElement>("#mdx-options-fieldset");
+const mdxJsxImportSource = $<HTMLInputElement>("#mdx-jsx-import-source");
+const mdxJsxRuntime = $<HTMLSelectElement>("#mdx-jsx-runtime");
+const mdxJsx = $<HTMLInputElement>("#mdx-jsx");
+const mdxDevelopment = $<HTMLInputElement>("#mdx-development");
+const mdxProviderImportSource = $<HTMLInputElement>("#mdx-provider-import-source");
+const featGfm = $<HTMLInputElement>("#feat-gfm");
+const featFrontmatter = $<HTMLInputElement>("#feat-frontmatter");
+const featMath = $<HTMLInputElement>("#feat-math");
+const featHeadingAttributes = $<HTMLInputElement>("#feat-heading-attributes");
+const featDirective = $<HTMLInputElement>("#feat-directive");
+const featSuperscript = $<HTMLInputElement>("#feat-superscript");
+const featSubscript = $<HTMLInputElement>("#feat-subscript");
+const featWikilinks = $<HTMLInputElement>("#feat-wikilinks");
+const featSmartPunctuation = $<HTMLInputElement>("#feat-smart-punctuation");
+const featDefinitionList = $<HTMLInputElement>("#feat-definition-list");
 
 let currentMode: Mode = "markdown";
 let activeTab: Tab = "mdast";
@@ -140,7 +155,40 @@ function syncScroll(textarea: HTMLTextAreaElement, pre: HTMLElement) {
 }
 
 function getMode(): Mode {
-  return ($<HTMLInputElement>('input[name="mode"]:checked')).value as Mode;
+  return $<HTMLInputElement>('input[name="mode"]:checked').value as Mode;
+}
+
+function getFeatures(): Features {
+  return {
+    gfm: featGfm.checked,
+    frontmatter: featFrontmatter.checked,
+    math: featMath.checked,
+    headingAttributes: featHeadingAttributes.checked,
+    directive: featDirective.checked,
+    superscript: featSuperscript.checked,
+    subscript: featSubscript.checked,
+    wikilinks: featWikilinks.checked,
+    smartPunctuation: featSmartPunctuation.checked,
+    definitionList: featDefinitionList.checked,
+  };
+}
+
+function getMdxOptions() {
+  if (currentMode !== "mdx") return undefined;
+  const result: Record<string, any> = {};
+  const jsxImportSource = mdxJsxImportSource.value.trim();
+  if (jsxImportSource) result.jsxImportSource = jsxImportSource;
+  const jsxRuntime = mdxJsxRuntime.value;
+  if (jsxRuntime !== "automatic") result.jsxRuntime = jsxRuntime;
+  if (mdxJsx.checked) result.jsx = true;
+  if (mdxDevelopment.checked) result.development = true;
+  const providerImportSource = mdxProviderImportSource.value.trim();
+  if (providerImportSource) result.providerImportSource = providerImportSource;
+
+  const os = getOptimizeStatic();
+  if (os) result.optimizeStatic = os;
+
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function getOptimizeStatic(): MdxCompileOptions["optimizeStatic"] | undefined {
@@ -158,6 +206,7 @@ function updateModeUI() {
   currentMode = getMode();
   const isMdx = currentMode === "mdx";
 
+  mdxOptionsFieldset.classList.toggle("hidden", !isMdx);
   optimizeFieldset.classList.toggle("hidden", !isMdx);
   outputTabButton.textContent = isMdx ? "JS" : "HTML";
   renderedTabButton.classList.toggle("hidden", isMdx);
@@ -262,15 +311,18 @@ async function compile() {
   if (gen !== compileGeneration) return;
 
   // Count plugins with active visitors for badge display
-  const activeMdastCount = mdastPlugins.filter((p) => resolveMdastSubscriptions(p).length > 0).length;
+  const activeMdastCount = mdastPlugins.filter(
+    (p) => resolveMdastSubscriptions(p).length > 0,
+  ).length;
   const activeHastCount = hastPlugins.filter((p) => resolveHastSubscriptions(p).length > 0).length;
   updatePluginBadges(activeMdastCount, activeHastCount);
 
+  const features = getFeatures();
   const totalStart = performance.now();
   try {
     // Step 1: parse → mdast handle
     const { result: mdastHandle, ms: parseMs } = time(() =>
-      isMdx ? createMdxMdastHandle(source) : createMdastHandle(source),
+      isMdx ? createMdxMdastHandle(source, features) : createMdastHandle(source, features),
     );
     timings.push(`parse → mdast <span>${fmt(parseMs)}</span>`);
 
@@ -280,7 +332,13 @@ async function compile() {
       const handleSource = getHandleSource(mdastHandle);
       for (const plugin of mdastPlugins) {
         const subs = resolveMdastSubscriptions(plugin);
-        const result = await visitMdastHandle(mdastHandle, plugin, subs, handleSource, "<playground>");
+        const result = await visitMdastHandle(
+          mdastHandle,
+          plugin,
+          subs,
+          handleSource,
+          "<playground>",
+        );
         if (gen !== compileGeneration) return;
         if (result.hasMutations) {
           applyCommandsToMdastHandle(mdastHandle, result.commandBuffer);
@@ -291,18 +349,20 @@ async function compile() {
 
     const { result: mdastBuf, ms: mdastSerMs } = time(() => serializeMdastHandle(mdastHandle));
     overhead += mdastSerMs;
-    const { result: mdastTree, ms: mdastMatMs } = time(() => materializeMdastTree(new MdastReader(mdastBuf)));
+    const { result: mdastTree, ms: mdastMatMs } = time(() =>
+      materializeMdastTree(new MdastReader(mdastBuf)),
+    );
     overhead += mdastMatMs;
     const mdastJson = JSON.stringify(mdastTree, null, 2);
     tabMdast.classList.remove("error");
-    const { ms: mdastDomMs } = time(() => { tabMdast.textContent = mdastJson; });
+    const { ms: mdastDomMs } = time(() => {
+      tabMdast.textContent = mdastJson;
+    });
     overhead += mdastDomMs;
     pendingHighlights.push({ el: tabMdast, code: mdastJson, lang: "json" });
 
     // Step 3: mdast → hast handle
-    const { result: hastHandle, ms: convertMs } = time(() =>
-      convertMdastToHastHandle(mdastHandle),
-    );
+    const { result: hastHandle, ms: convertMs } = time(() => convertMdastToHastHandle(mdastHandle));
     timings.push(`mdast → hast <span>${fmt(convertMs)}</span>`);
 
     // Step 4: run hast plugins (if any)
@@ -319,19 +379,22 @@ async function compile() {
     // Serialize hast for display (post-plugin)
     const { result: hastBuf, ms: hastSerMs } = time(() => serializeHandle(hastHandle));
     overhead += hastSerMs;
-    const { result: hastTree, ms: hastMatMs } = time(() => materializeHastTree(new HastReader(hastBuf)));
+    const { result: hastTree, ms: hastMatMs } = time(() =>
+      materializeHastTree(new HastReader(hastBuf)),
+    );
     overhead += hastMatMs;
     const hastJson = JSON.stringify(hastTree, null, 2);
     tabHast.classList.remove("error");
-    const { ms: hastDomMs } = time(() => { tabHast.textContent = hastJson; });
+    const { ms: hastDomMs } = time(() => {
+      tabHast.textContent = hastJson;
+    });
     overhead += hastDomMs;
     pendingHighlights.push({ el: tabHast, code: hastJson, lang: "json" });
 
     // Step 5: hast → html or js
     let outputStr: string;
     if (isMdx) {
-      const os = getOptimizeStatic();
-      const mdxOptions = os ? { optimizeStatic: os } : undefined;
+      const mdxOptions = getMdxOptions();
       const { result: js, ms } = time(() => compileHandle(hastHandle, mdxOptions));
       timings.push(`hast → js <span>${fmt(ms)}</span>`);
       outputStr = js;
@@ -429,6 +492,28 @@ document.querySelectorAll('input[name="mode"]').forEach((el) => {
   });
 });
 
+// Feature toggles
+[
+  featGfm,
+  featFrontmatter,
+  featMath,
+  featHeadingAttributes,
+  featDirective,
+  featSuperscript,
+  featSubscript,
+  featWikilinks,
+  featSmartPunctuation,
+  featDefinitionList,
+].forEach((el) => el.addEventListener("change", scheduleCompile));
+
+// MDX options
+[mdxJsxImportSource, mdxProviderImportSource].forEach((el) => {
+  el.addEventListener("input", scheduleCompile);
+});
+[mdxJsxRuntime, mdxJsx, mdxDevelopment].forEach((el) => {
+  el.addEventListener("change", scheduleCompile);
+});
+
 // optimizeStatic toggle
 optimizeToggle.addEventListener("change", () => {
   optimizeFields.classList.toggle("hidden", !optimizeToggle.checked);
@@ -461,8 +546,7 @@ for (const [textarea, pre, lang] of inputPairs) {
       e.preventDefault();
       const start = textarea.selectionStart;
       const end = textarea.selectionEnd;
-      textarea.value =
-        textarea.value.substring(0, start) + "  " + textarea.value.substring(end);
+      textarea.value = textarea.value.substring(0, start) + "  " + textarea.value.substring(end);
       textarea.selectionStart = textarea.selectionEnd = start + 2;
       highlightInput(textarea, pre, lang);
       scheduleCompile();

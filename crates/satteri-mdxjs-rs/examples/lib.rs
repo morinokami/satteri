@@ -18,7 +18,8 @@ flood conditions in many of the nearby rivers.
 
 <Chart year={year} color="#fcb32c" />
 "##,
-            &Default::default()
+            &Default::default(),
+            satteri_pulldown_cmark::MDX_OPTIONS,
         )?
     );
 

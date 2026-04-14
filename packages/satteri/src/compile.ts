@@ -29,6 +29,24 @@ import { HastReader } from "./hast/hast-reader.js";
 import { materializeHastTree } from "./hast/hast-materializer.js";
 import type { MdastNode, HastNode } from "./types.js";
 
+function featuresToNative(features: Features | undefined) {
+  if (!features) return undefined;
+  // Build object with only defined keys to satisfy exactOptionalPropertyTypes
+  const result: Record<string, boolean> = {};
+  if (features.gfm !== undefined) result.gfm = features.gfm;
+  if (features.frontmatter !== undefined) result.frontmatter = features.frontmatter;
+  if (features.math !== undefined) result.math = features.math;
+  if (features.headingAttributes !== undefined)
+    result.headingAttributes = features.headingAttributes;
+  if (features.directive !== undefined) result.directive = features.directive;
+  if (features.superscript !== undefined) result.superscript = features.superscript;
+  if (features.subscript !== undefined) result.subscript = features.subscript;
+  if (features.wikilinks !== undefined) result.wikilinks = features.wikilinks;
+  if (features.smartPunctuation !== undefined) result.smartPunctuation = features.smartPunctuation;
+  if (features.definitionList !== undefined) result.definitionList = features.definitionList;
+  return result;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type MdastHandle = any;
 
@@ -113,6 +131,42 @@ function runHastPluginsOnHandle(
 
 // Public API
 
+function mdxOptionsToNative(opts: {
+  optimizeStatic?: OptimizeStaticConfig;
+  jsxImportSource?: string;
+  jsx?: boolean;
+  jsxRuntime?: "automatic" | "classic";
+  development?: boolean;
+  providerImportSource?: string;
+  pragma?: string;
+  pragmaFrag?: string;
+  pragmaImportSource?: string;
+}) {
+  const hasAny =
+    opts.optimizeStatic ||
+    opts.jsxImportSource !== undefined ||
+    opts.jsx !== undefined ||
+    opts.jsxRuntime !== undefined ||
+    opts.development !== undefined ||
+    opts.providerImportSource !== undefined ||
+    opts.pragma !== undefined ||
+    opts.pragmaFrag !== undefined ||
+    opts.pragmaImportSource !== undefined;
+  if (!hasAny) return undefined;
+  const result: Record<string, any> = {};
+  if (opts.optimizeStatic) result.optimizeStatic = opts.optimizeStatic;
+  if (opts.jsxImportSource !== undefined) result.jsxImportSource = opts.jsxImportSource;
+  if (opts.jsx !== undefined) result.jsx = opts.jsx;
+  if (opts.jsxRuntime !== undefined) result.jsxRuntime = opts.jsxRuntime;
+  if (opts.development !== undefined) result.development = opts.development;
+  if (opts.providerImportSource !== undefined)
+    result.providerImportSource = opts.providerImportSource;
+  if (opts.pragma !== undefined) result.pragma = opts.pragma;
+  if (opts.pragmaFrag !== undefined) result.pragmaFrag = opts.pragmaFrag;
+  if (opts.pragmaImportSource !== undefined) result.pragmaImportSource = opts.pragmaImportSource;
+  return result;
+}
+
 /** Configuration for static subtree collapsing during MDX compilation. */
 export interface OptimizeStaticConfig {
   component: string;
@@ -121,27 +175,75 @@ export interface OptimizeStaticConfig {
   ignoreElements?: string[];
 }
 
+/** Parser feature toggles. All default to their documented value when omitted. */
+export interface Features {
+  /** GFM: tables, footnotes, strikethrough, task lists, blockquote tags. Default: true. */
+  gfm?: boolean;
+  /** Frontmatter: YAML (`--- ... ---`) and TOML (`+++ ... +++`). Default: true. */
+  frontmatter?: boolean;
+  /** Math blocks and inline math. Default: true. */
+  math?: boolean;
+  /** Heading attributes (`# text { #id .class }`). Default: true. */
+  headingAttributes?: boolean;
+  /** Colon-delimited container directive blocks (`:::`). Default: false. */
+  directive?: boolean;
+  /** Superscript (`^super^`). Default: false. */
+  superscript?: boolean;
+  /** Subscript (`~sub~`). Default: false. */
+  subscript?: boolean;
+  /** Obsidian-style wikilinks (`[[link]]`). Default: false. */
+  wikilinks?: boolean;
+  /** Smart punctuation à la SmartyPants. Default: false. */
+  smartPunctuation?: boolean;
+  /** Definition lists. Default: false. */
+  definitionList?: boolean;
+}
+
 export interface CompileOptions {
   mdastPlugins?: MdastPluginDefinition[];
   hastPlugins?: HastPluginDefinition[];
+  features?: Features;
   filename?: string;
 }
 
 export interface MdxCompileOptions extends CompileOptions {
   optimizeStatic?: OptimizeStaticConfig;
+  /** Place to import automatic JSX runtimes from (e.g. "react", "preact"). Default: "react". */
+  jsxImportSource?: string;
+  /** Whether to keep JSX instead of compiling it to functions. Default: false. */
+  jsx?: boolean;
+  /** JSX runtime: "automatic" (default) or "classic". */
+  jsxRuntime?: "automatic" | "classic";
+  /** Enable development mode. Default: false. */
+  development?: boolean;
+  /** Place to import the component provider from. */
+  providerImportSource?: string;
+  /** Pragma for JSX in classic runtime (default: "React.createElement"). */
+  pragma?: string;
+  /** Pragma for JSX fragments in classic runtime (default: "React.Fragment"). */
+  pragmaFrag?: string;
+  /** Where to import the pragma from in classic runtime (default: "react"). */
+  pragmaImportSource?: string;
 }
 
 export function markdownToHtml(
   source: string,
   options: CompileOptions = {},
 ): string | Promise<string> {
-  const { mdastPlugins = [], hastPlugins = [], filename = "<unknown>" } = options;
+  const { mdastPlugins = [], hastPlugins = [], features, filename = "<unknown>" } = options;
+  const nativeFeatures = featuresToNative(features);
 
   if (mdastPlugins.length === 0 && hastPlugins.length === 0) {
-    return parseToHtml(source);
+    return parseToHtml(source, nativeFeatures);
   }
 
-  const handleResult = createHastHandleFromMdast(source, mdastPlugins, false, filename);
+  const handleResult = createHastHandleFromMdast(
+    source,
+    mdastPlugins,
+    false,
+    filename,
+    nativeFeatures,
+  );
 
   const finish = (hastHandle: HastHandle): string | Promise<string> => {
     const asyncResult = runHastPluginsOnHandle(hastHandle, hastPlugins, source, filename);
@@ -164,14 +266,27 @@ export function markdownToHtml(
 }
 
 export function mdxToJs(source: string, options: MdxCompileOptions = {}): string | Promise<string> {
-  const { mdastPlugins = [], hastPlugins = [], optimizeStatic, filename = "<unknown>" } = options;
-  const mdxOptions = optimizeStatic ? { optimizeStatic } : undefined;
+  const {
+    mdastPlugins = [],
+    hastPlugins = [],
+    features,
+    filename = "<unknown>",
+    ...mdxFields
+  } = options;
+  const mdxOptions = mdxOptionsToNative(mdxFields);
+  const nativeFeatures = featuresToNative(features);
 
   if (mdastPlugins.length === 0 && hastPlugins.length === 0) {
-    return compileMdx(source, mdxOptions);
+    return compileMdx(source, mdxOptions, nativeFeatures);
   }
 
-  const handleResult = createHastHandleFromMdast(source, mdastPlugins, true, filename);
+  const handleResult = createHastHandleFromMdast(
+    source,
+    mdastPlugins,
+    true,
+    filename,
+    nativeFeatures,
+  );
 
   const finish = (hastHandle: HastHandle): string | Promise<string> => {
     const asyncResult = runHastPluginsOnHandle(hastHandle, hastPlugins, source, filename);
@@ -202,12 +317,18 @@ function createHastHandleFromMdast(
   mdastPlugins: MdastPluginDefinition[],
   mdx: boolean,
   filename: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  nativeFeatures?: any,
 ): HastHandle | Promise<HastHandle> {
   if (mdastPlugins.length === 0) {
-    return mdx ? createMdxHastHandle(source) : createHastHandle(source);
+    return mdx
+      ? createMdxHastHandle(source, nativeFeatures)
+      : createHastHandle(source, nativeFeatures);
   }
 
-  const mdastHandle = mdx ? createMdxMdastHandle(source) : createMdastHandle(source);
+  const mdastHandle = mdx
+    ? createMdxMdastHandle(source, nativeFeatures)
+    : createMdastHandle(source, nativeFeatures);
   const mdastResult = runMdastPluginsOnHandle(mdastHandle, mdastPlugins, filename);
 
   const convert = (r: MdastPipelineResult): HastHandle => {
@@ -226,30 +347,30 @@ function createHastHandleFromMdast(
 // Step-by-step API: individual pipeline stages with materialized trees
 
 /** Parse Markdown source into a materialized mdast tree. */
-export function markdownToMdast(source: string): MdastNode {
-  const handle = createMdastHandle(source);
+export function markdownToMdast(source: string, options: { features?: Features } = {}): MdastNode {
+  const handle = createMdastHandle(source, featuresToNative(options.features));
   const buf = serializeMdastHandle(handle);
   return materializeMdastTree(new MdastReader(buf));
 }
 
 /** Parse MDX source into a materialized mdast tree. */
-export function mdxToMdast(source: string): MdastNode {
-  const handle = createMdxMdastHandle(source);
+export function mdxToMdast(source: string, options: { features?: Features } = {}): MdastNode {
+  const handle = createMdxMdastHandle(source, featuresToNative(options.features));
   const buf = serializeMdastHandle(handle);
   return materializeMdastTree(new MdastReader(buf));
 }
 
 /** Convert Markdown source to a materialized hast tree. */
-export function markdownToHast(source: string): HastNode {
-  const handle = createHastHandle(source);
+export function markdownToHast(source: string, options: { features?: Features } = {}): HastNode {
+  const handle = createHastHandle(source, featuresToNative(options.features));
   const buf = serializeHandle(handle);
   dropHandle(handle);
   return materializeHastTree(new HastReader(buf));
 }
 
 /** Convert MDX source to a materialized hast tree. */
-export function mdxToHast(source: string): HastNode {
-  const handle = createMdxHastHandle(source);
+export function mdxToHast(source: string, options: { features?: Features } = {}): HastNode {
+  const handle = createMdxHastHandle(source, featuresToNative(options.features));
   const buf = serializeHandle(handle);
   dropHandle(handle);
   return materializeHastTree(new HastReader(buf));

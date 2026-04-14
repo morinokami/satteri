@@ -3,6 +3,93 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
+// Parsing feature flags (JS-facing)
+
+/// Feature toggles for the Markdown/MDX parser, passed from JavaScript.
+#[napi(object)]
+pub struct JsFeatures {
+    /// GFM: tables, footnotes, strikethrough, task lists, blockquote tags.
+    /// Default: true.
+    pub gfm: Option<bool>,
+    /// Frontmatter: YAML (`--- ... ---`) and TOML (`+++ ... +++`). Default: true.
+    pub frontmatter: Option<bool>,
+    /// Math blocks and inline math (`$$ ... $$`, `$ ... $`). Default: true.
+    pub math: Option<bool>,
+    /// Heading attributes (`# text { #id .class }`). Default: true.
+    pub heading_attributes: Option<bool>,
+    /// Colon-delimited container directive blocks (`:::`). Default: false.
+    pub directive: Option<bool>,
+    /// Superscript (`^super^`). Default: false.
+    pub superscript: Option<bool>,
+    /// Subscript (`~sub~`). Default: false.
+    pub subscript: Option<bool>,
+    /// Obsidian-style wikilinks (`[[link]]`). Default: false.
+    pub wikilinks: Option<bool>,
+    /// Smart punctuation (ligatures, smart quotes). Default: false.
+    pub smart_punctuation: Option<bool>,
+    /// Definition lists. Default: false.
+    pub definition_list: Option<bool>,
+}
+
+fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulldown_cmark::Options {
+    use satteri_pulldown_cmark::Options;
+
+    let f = features.unwrap_or(JsFeatures {
+        gfm: None,
+        frontmatter: None,
+        math: None,
+        heading_attributes: None,
+        directive: None,
+        superscript: None,
+        subscript: None,
+        wikilinks: None,
+        smart_punctuation: None,
+        definition_list: None,
+    });
+
+    let mut opts = Options::empty();
+
+    if f.gfm.unwrap_or(true) {
+        opts |= Options::ENABLE_TABLES
+            | Options::ENABLE_FOOTNOTES
+            | Options::ENABLE_STRIKETHROUGH
+            | Options::ENABLE_TASKLISTS
+            | Options::ENABLE_GFM;
+    }
+    if f.frontmatter.unwrap_or(true) {
+        opts |= Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
+            | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS;
+    }
+    if f.math.unwrap_or(true) {
+        opts |= Options::ENABLE_MATH;
+    }
+    if f.heading_attributes.unwrap_or(true) {
+        opts |= Options::ENABLE_HEADING_ATTRIBUTES;
+    }
+    if f.directive.unwrap_or(false) {
+        opts |= Options::ENABLE_CONTAINER_EXTENSIONS;
+    }
+    if f.superscript.unwrap_or(false) {
+        opts |= Options::ENABLE_SUPERSCRIPT;
+    }
+    if f.subscript.unwrap_or(false) {
+        opts |= Options::ENABLE_SUBSCRIPT;
+    }
+    if f.wikilinks.unwrap_or(false) {
+        opts |= Options::ENABLE_WIKILINKS;
+    }
+    if f.smart_punctuation.unwrap_or(false) {
+        opts |= Options::ENABLE_SMART_PUNCTUATION;
+    }
+    if f.definition_list.unwrap_or(false) {
+        opts |= Options::ENABLE_DEFINITION_LIST;
+    }
+    if mdx {
+        opts |= Options::ENABLE_MDX;
+    }
+    opts
+}
+
 // MDX compilation options (JS-facing)
 
 /// Static optimization config passed from JavaScript.
@@ -24,6 +111,24 @@ pub struct JsMdxOptions {
     /// Static subtree optimization. If provided, static subtrees are collapsed
     /// into raw HTML strings using the specified component and prop.
     pub optimize_static: Option<JsOptimizeStaticConfig>,
+    /// Place to import automatic JSX runtimes from (e.g. "react", "preact").
+    /// Default: "react".
+    pub jsx_import_source: Option<String>,
+    /// Whether to keep JSX instead of compiling it away. Default: false.
+    pub jsx: Option<bool>,
+    /// JSX runtime: "automatic" (default) or "classic".
+    pub jsx_runtime: Option<String>,
+    /// Whether to add extra info to error messages and use the development
+    /// JSX runtime. Default: false.
+    pub development: Option<bool>,
+    /// Place to import a provider from (e.g. "@mdx-js/react").
+    pub provider_import_source: Option<String>,
+    /// Pragma for JSX in classic runtime (default: "React.createElement").
+    pub pragma: Option<String>,
+    /// Pragma for JSX fragments in classic runtime (default: "React.Fragment").
+    pub pragma_frag: Option<String>,
+    /// Where to import the pragma from in classic runtime (default: "react").
+    pub pragma_import_source: Option<String>,
 }
 
 fn js_options_to_rust(opts: Option<JsMdxOptions>) -> satteri_mdxjs::Options {
@@ -37,6 +142,33 @@ fn js_options_to_rust(opts: Option<JsMdxOptions>) -> satteri_mdxjs::Options {
                 ignore_elements: config.ignore_elements.unwrap_or_default(),
             });
         }
+        if let Some(src) = js.jsx_import_source {
+            options.jsx_import_source = Some(src);
+        }
+        if let Some(val) = js.jsx {
+            options.jsx = val;
+        }
+        if let Some(rt) = js.jsx_runtime {
+            options.jsx_runtime = Some(match rt.as_str() {
+                "classic" => satteri_mdxjs::JsxRuntime::Classic,
+                _ => satteri_mdxjs::JsxRuntime::Automatic,
+            });
+        }
+        if let Some(val) = js.development {
+            options.development = val;
+        }
+        if let Some(src) = js.provider_import_source {
+            options.provider_import_source = Some(src);
+        }
+        if let Some(val) = js.pragma {
+            options.pragma = Some(val);
+        }
+        if let Some(val) = js.pragma_frag {
+            options.pragma_frag = Some(val);
+        }
+        if let Some(val) = js.pragma_import_source {
+            options.pragma_import_source = Some(val);
+        }
     }
     options
 }
@@ -45,9 +177,15 @@ fn js_options_to_rust(opts: Option<JsMdxOptions>) -> satteri_mdxjs::Options {
 
 /// Compile MDX source directly to JavaScript.
 #[napi]
-pub fn compile_mdx(source: String, options: Option<JsMdxOptions>) -> Result<String> {
+pub fn compile_mdx(
+    source: String,
+    options: Option<JsMdxOptions>,
+    features: Option<JsFeatures>,
+) -> Result<String> {
     let opts = js_options_to_rust(options);
-    satteri_mdxjs::compile(&source, &opts).map_err(|e| napi::Error::from_reason(e.to_string()))
+    let parse_opts = features_to_options(features, true);
+    satteri_mdxjs::compile(&source, &opts, parse_opts)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))
 }
 
 // Direct rendering (no handle needed)
@@ -55,9 +193,9 @@ pub fn compile_mdx(source: String, options: Option<JsMdxOptions>) -> Result<Stri
 /// Parse Markdown source and return HTML string directly.
 /// Uses pulldown-cmark's streaming renderer, skipping the arena entirely.
 #[napi]
-pub fn parse_to_html(source: String) -> Result<String> {
-    let parser =
-        satteri_pulldown_cmark::Parser::new_ext(&source, satteri_pulldown_cmark::DEFAULT_OPTIONS);
+pub fn parse_to_html(source: String, features: Option<JsFeatures>) -> Result<String> {
+    let opts = features_to_options(features, false);
+    let parser = satteri_pulldown_cmark::Parser::new_ext(&source, opts);
     let mut html = String::with_capacity(source.len());
     satteri_pulldown_cmark::html::push_html(&mut html, parser);
     Ok(html)
@@ -69,15 +207,15 @@ use std::sync::Mutex;
 
 type ArenaHandle = External<Mutex<satteri_arena::Arena>>;
 
-fn make_parse_fn(mdx: bool) -> impl Fn(&str) -> satteri_arena::Arena {
+fn make_parse_fn(
+    mdx: bool,
+    parse_options: u32,
+) -> impl Fn(&str) -> satteri_arena::Arena {
     move |source: &str| -> satteri_arena::Arena {
-        let opts = if mdx {
-            satteri_pulldown_cmark::MDX_OPTIONS
-        } else {
-            satteri_pulldown_cmark::DEFAULT_OPTIONS
-        };
+        let opts = satteri_pulldown_cmark::Options::from_bits_truncate(parse_options);
         let (mut parsed, _errors) = satteri_pulldown_cmark::parse(source, opts);
         parsed.mdx = mdx;
+        parsed.parse_options = parse_options;
         parsed
     }
 }
@@ -91,19 +229,24 @@ pub struct JsSubscription {
 
 /// Parse markdown source into an MDAST arena handle.
 #[napi]
-pub fn create_mdast_handle(source: String) -> Result<ArenaHandle> {
-    let (mut arena, _) =
-        satteri_pulldown_cmark::parse(&source, satteri_pulldown_cmark::DEFAULT_OPTIONS);
+pub fn create_mdast_handle(source: String, features: Option<JsFeatures>) -> Result<ArenaHandle> {
+    let opts = features_to_options(features, false);
+    let (mut arena, _) = satteri_pulldown_cmark::parse(&source, opts);
     arena.mdx = false;
+    arena.parse_options = opts.bits();
     Ok(External::new(Mutex::new(arena)))
 }
 
 /// Parse MDX source into an MDAST arena handle.
 #[napi]
-pub fn create_mdx_mdast_handle(source: String) -> Result<ArenaHandle> {
-    let (mut arena, _) =
-        satteri_pulldown_cmark::parse(&source, satteri_pulldown_cmark::MDX_OPTIONS);
+pub fn create_mdx_mdast_handle(
+    source: String,
+    features: Option<JsFeatures>,
+) -> Result<ArenaHandle> {
+    let opts = features_to_options(features, true);
+    let (mut arena, _) = satteri_pulldown_cmark::parse(&source, opts);
     arena.mdx = true;
+    arena.parse_options = opts.bits();
     Ok(External::new(Mutex::new(arena)))
 }
 
@@ -166,7 +309,7 @@ pub fn apply_commands_to_mdast_handle(handle: &ArenaHandle, command_buf: Uint8Ar
     let mut arena = handle
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
-    let parse_markdown = make_parse_fn(arena.mdx);
+    let parse_markdown = make_parse_fn(arena.mdx, arena.parse_options);
     let owned = std::mem::replace(&mut *arena, satteri_arena::Arena::new(String::new()));
     let new_arena = satteri_plugin_api::apply_commands(owned, &command_buf, &parse_markdown)
         .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
@@ -181,9 +324,11 @@ pub fn convert_mdast_to_hast_handle(handle: &ArenaHandle) -> Result<ArenaHandle>
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
     let mdx = arena.mdx;
+    let parse_options = arena.parse_options;
     let owned = std::mem::replace(&mut *arena, satteri_arena::Arena::new(String::new()));
     let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena(&owned);
     hast.mdx = mdx;
+    hast.parse_options = parse_options;
     Ok(External::new(Mutex::new(hast)))
 }
 
@@ -198,32 +343,39 @@ pub fn apply_commands_and_convert_to_hast_handle(
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
     let mdx = arena.mdx;
-    let parse_markdown = make_parse_fn(mdx);
+    let parse_options = arena.parse_options;
+    let parse_markdown = make_parse_fn(mdx, parse_options);
     let owned = std::mem::replace(&mut *arena, satteri_arena::Arena::new(String::new()));
     let mutated = satteri_plugin_api::apply_commands(owned, &command_buf, &parse_markdown)
         .map_err(|e| napi::Error::from_reason(format!("command error: {e}")))?;
     let mut hast_arena = satteri_ast::hast::mdast_arena_to_hast_arena(&mutated);
     hast_arena.mdx = mdx;
+    hast_arena.parse_options = parse_options;
     Ok(External::new(Mutex::new(hast_arena)))
 }
 
 /// Parse markdown source and convert to HAST. Returns an opaque handle.
 /// The arena stays in Rust memory, no buffer is copied to JS.
 #[napi]
-pub fn create_hast_handle(source: String) -> Result<ArenaHandle> {
-    let (mdast, _) =
-        satteri_pulldown_cmark::parse(&source, satteri_pulldown_cmark::DEFAULT_OPTIONS);
+pub fn create_hast_handle(source: String, features: Option<JsFeatures>) -> Result<ArenaHandle> {
+    let opts = features_to_options(features, false);
+    let (mut mdast, _) = satteri_pulldown_cmark::parse(&source, opts);
+    mdast.parse_options = opts.bits();
     let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena(&mdast);
     hast.mdx = false;
+    hast.parse_options = opts.bits();
     Ok(External::new(Mutex::new(hast)))
 }
 
 /// Parse MDX source and convert to HAST. Returns an opaque handle.
 #[napi]
-pub fn create_mdx_hast_handle(source: String) -> Result<ArenaHandle> {
-    let (mdast, _) = satteri_pulldown_cmark::parse(&source, satteri_pulldown_cmark::MDX_OPTIONS);
+pub fn create_mdx_hast_handle(source: String, features: Option<JsFeatures>) -> Result<ArenaHandle> {
+    let opts = features_to_options(features, true);
+    let (mut mdast, _) = satteri_pulldown_cmark::parse(&source, opts);
+    mdast.parse_options = opts.bits();
     let mut hast = satteri_ast::hast::mdast_arena_to_hast_arena(&mdast);
     hast.mdx = true;
+    hast.parse_options = opts.bits();
     Ok(External::new(Mutex::new(hast)))
 }
 
@@ -252,7 +404,7 @@ pub fn apply_commands_to_handle(handle: &ArenaHandle, command_buf: Uint8Array) -
         .lock()
         .map_err(|e| napi::Error::from_reason(format!("lock: {e}")))?;
 
-    let parse_markdown = make_parse_fn(arena.mdx);
+    let parse_markdown = make_parse_fn(arena.mdx, arena.parse_options);
 
     // apply_commands takes ownership, so swap out the arena
     let owned = std::mem::replace(&mut *arena, satteri_arena::Arena::new(String::new()));

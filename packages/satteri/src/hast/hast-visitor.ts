@@ -556,7 +556,8 @@ function readMatchedNode(
     nodeType === HAST_COMMENT ||
     nodeType === HAST_RAW ||
     nodeType === HAST_MDX_FLOW_EXPRESSION ||
-    nodeType === HAST_MDX_TEXT_EXPRESSION
+    nodeType === HAST_MDX_TEXT_EXPRESSION ||
+    nodeType === HAST_MDX_ESM
   ) {
     return readTextFromBinary(view, buf, offset, nodeId, nodeType);
   } else if (nodeType === HAST_MDX_JSX_ELEMENT || nodeType === HAST_MDX_JSX_TEXT_ELEMENT) {

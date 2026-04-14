@@ -1,11 +1,248 @@
 use memchr::memchr;
 
+use oxc_allocator::Allocator;
+use oxc_parser::{ParseOptions, Parser};
+use oxc_span::SourceType;
+
 use crate::{
     firstpass::FirstPass,
     parse::{Item, ItemBody},
 };
 
-// Helpers
+/// Result of trying to parse an ESM block with oxc.
+pub(crate) enum EsmParseResult {
+    Complete,
+    Incomplete,
+    Error,
+}
+
+/// Try to parse an ESM block to check completeness.
+///
+/// Accepts a reusable allocator to avoid repeated allocation in the
+/// blank-line retry loop.
+pub(crate) fn try_parse_esm(value: &str, allocator: &mut Allocator) -> EsmParseResult {
+    allocator.reset();
+    let source_type = SourceType::mjs().with_jsx(true);
+    let source = allocator.alloc_str(value);
+    let ret = Parser::new(allocator, source, source_type)
+        .with_options(ParseOptions::default())
+        .parse();
+
+    if ret.errors.is_empty() {
+        return EsmParseResult::Complete;
+    }
+
+    let error = &ret.errors[0];
+    let error_offset = error
+        .labels
+        .as_ref()
+        .and_then(|labels| labels.first().map(|l| l.offset()))
+        .unwrap_or(value.len());
+
+    if error_offset >= value.len() {
+        EsmParseResult::Incomplete
+    } else {
+        EsmParseResult::Error
+    }
+}
+
+/// Keywords after which `/` starts a regex literal, not division.
+const REGEX_KEYWORDS: &[&[u8]] = &[
+    b"await",
+    b"case",
+    b"delete",
+    b"in",
+    b"instanceof",
+    b"new",
+    b"of",
+    b"return",
+    b"throw",
+    b"typeof",
+    b"void",
+    b"yield",
+];
+
+/// Determine whether `/` at `pos` is the start of a regex literal.
+fn slash_is_regex(bytes: &[u8], pos: usize) -> bool {
+    let mut i = pos;
+    while i > 0 {
+        i -= 1;
+        match bytes[i] {
+            b' ' | b'\t' | b'\n' | b'\r' => continue,
+            b')' | b']' => return false,
+            b'"' | b'\'' | b'`' => return false,
+            b'+' if i > 0 && bytes[i - 1] == b'+' => return false,
+            b'-' if i > 0 && bytes[i - 1] == b'-' => return false,
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'$' => {
+                let end = i + 1;
+                while i > 0
+                    && (bytes[i - 1].is_ascii_alphanumeric()
+                        || bytes[i - 1] == b'_'
+                        || bytes[i - 1] == b'$')
+                {
+                    i -= 1;
+                }
+                let word = &bytes[i..end];
+                let is_keyword_boundary = i == 0
+                    || (!bytes[i - 1].is_ascii_alphanumeric()
+                        && bytes[i - 1] != b'_'
+                        && bytes[i - 1] != b'$');
+                if is_keyword_boundary && REGEX_KEYWORDS.contains(&word) {
+                    return true;
+                }
+                return false;
+            }
+            _ => return true,
+        }
+    }
+    true
+}
+
+/// Scan a regex literal starting at `/`, returning the offset past the flags.
+fn scan_regex(bytes: &[u8], start: usize) -> usize {
+    let mut ix = start + 1;
+    while ix < bytes.len() {
+        match bytes[ix] {
+            b'/' => {
+                ix += 1;
+                while ix < bytes.len() && bytes[ix].is_ascii_alphanumeric() {
+                    ix += 1;
+                }
+                return ix;
+            }
+            b'\\' => ix += 2,
+            b'[' => {
+                ix += 1;
+                while ix < bytes.len() && bytes[ix] != b']' {
+                    if bytes[ix] == b'\\' {
+                        ix += 1;
+                    }
+                    ix += 1;
+                }
+                if ix < bytes.len() {
+                    ix += 1;
+                }
+            }
+            b'\n' | b'\r' => return ix,
+            _ => ix += 1,
+        }
+    }
+    ix
+}
+
+/// Scan an MDX expression `{...}`, finding the matching closing `}`.
+///
+/// Uses a lightweight JS lexer that properly handles strings, comments,
+/// template literals, and regex literals. MDX expressions are rarely complex, so this should cover the vast majority of cases without needing a parser. I kinda wish oxc's exposed his lexer, though.
+///
+/// Returns the byte offset past the closing `}`, or `None` if unclosed.
+fn scan_mdx_expression_end(bytes: &[u8]) -> Option<usize> {
+    if bytes.is_empty() || bytes[0] != b'{' {
+        return None;
+    }
+
+    let mut ix = 1;
+    let mut depth: usize = 1;
+
+    while ix < bytes.len() && depth > 0 {
+        match bytes[ix] {
+            b'{' => {
+                depth += 1;
+                ix += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(ix + 1);
+                }
+                ix += 1;
+            }
+            // String literals (cannot span lines in JS)
+            b'"' | b'\'' => {
+                let quote = bytes[ix];
+                ix += 1;
+                while ix < bytes.len()
+                    && bytes[ix] != quote
+                    && bytes[ix] != b'\n'
+                    && bytes[ix] != b'\r'
+                {
+                    if bytes[ix] == b'\\' {
+                        ix += 1;
+                    }
+                    ix += 1;
+                }
+                if ix < bytes.len() && bytes[ix] == quote {
+                    ix += 1;
+                }
+            }
+            // Template literals with ${} nesting
+            b'`' => {
+                ix += 1;
+                let mut template_depth: usize = 0;
+                while ix < bytes.len() {
+                    match bytes[ix] {
+                        b'`' if template_depth == 0 => {
+                            ix += 1;
+                            break;
+                        }
+                        b'\\' => {
+                            ix += 2;
+                            continue;
+                        }
+                        b'$' if ix + 1 < bytes.len() && bytes[ix + 1] == b'{' => {
+                            template_depth += 1;
+                            ix += 2;
+                            continue;
+                        }
+                        b'{' if template_depth > 0 => template_depth += 1,
+                        b'}' if template_depth > 0 => template_depth -= 1,
+                        _ => {}
+                    }
+                    ix += 1;
+                }
+            }
+            // Line comment
+            b'/' if ix + 1 < bytes.len() && bytes[ix + 1] == b'/' => {
+                ix += 2;
+                while ix < bytes.len() && bytes[ix] != b'\n' {
+                    ix += 1;
+                }
+            }
+            // Block comment
+            b'/' if ix + 1 < bytes.len() && bytes[ix + 1] == b'*' => {
+                ix += 2;
+                while ix + 1 < bytes.len() {
+                    if bytes[ix] == b'*' && bytes[ix + 1] == b'/' {
+                        ix += 2;
+                        break;
+                    }
+                    ix += 1;
+                }
+            }
+            // Regex literal
+            b'/' if slash_is_regex(bytes, ix) => {
+                ix = scan_regex(bytes, ix);
+            }
+            // JSX tags — skip `<tag ...>` and `</tag>` so their `/` and `{}`
+            // don't interfere with brace/regex tracking.
+            b'<' if ix + 1 < bytes.len()
+                && (bytes[ix + 1].is_ascii_alphabetic()
+                    || bytes[ix + 1] == b'_'
+                    || bytes[ix + 1] == b'$'
+                    || bytes[ix + 1] == b'/'
+                    || bytes[ix + 1] == b'>') =>
+            {
+                if let Some(end) = scan_mdx_jsx_tag_end(&bytes[ix..]) {
+                    ix += end;
+                } else {
+                    ix += 1;
+                }
+            }
+            _ => ix += 1,
+        }
+    }
+    None
+}
 
 /// Check if from `start` to the next newline (or EOF) there are only spaces/tabs.
 fn is_only_whitespace_to_eol(bytes: &[u8]) -> bool {
@@ -80,22 +317,16 @@ fn scan_mdx_jsx_tag_end(bytes: &[u8]) -> Option<usize> {
         }
     }
 
-    let mut brace_depth: usize = 0;
     while ix < bytes.len() {
         match bytes[ix] {
-            b'>' if brace_depth == 0 => {
-                return Some(ix + 1);
-            }
-            b'/' if ix + 1 < bytes.len() && bytes[ix + 1] == b'>' && brace_depth == 0 => {
+            b'>' => return Some(ix + 1),
+            b'/' if ix + 1 < bytes.len() && bytes[ix + 1] == b'>' => {
                 return Some(ix + 2);
             }
             b'{' => {
-                brace_depth += 1;
-                ix += 1;
-            }
-            b'}' => {
-                brace_depth = brace_depth.saturating_sub(1);
-                ix += 1;
+                // Attribute expression — use lexer to find the matching `}`.
+                let expr_len = scan_mdx_expression_end(&bytes[ix..])?;
+                ix += expr_len;
             }
             b'"' => {
                 ix += 1;
@@ -107,7 +338,7 @@ fn scan_mdx_jsx_tag_end(bytes: &[u8]) -> Option<usize> {
                 }
                 if ix < bytes.len() {
                     ix += 1;
-                } // skip closing quote
+                }
             }
             b'\'' => {
                 ix += 1;
@@ -121,17 +352,7 @@ fn scan_mdx_jsx_tag_end(bytes: &[u8]) -> Option<usize> {
                     ix += 1;
                 }
             }
-            b'`' => {
-                ix += 1;
-                while ix < bytes.len() && bytes[ix] != b'`' {
-                    ix += 1;
-                }
-                if ix < bytes.len() {
-                    ix += 1;
-                }
-            }
             b'\n' | b'\r' => {
-                // Multi-line JSX: keep scanning
                 ix += 1;
                 if ix < bytes.len() && bytes[ix - 1] == b'\r' && bytes[ix] == b'\n' {
                     ix += 1;
@@ -143,10 +364,13 @@ fn scan_mdx_jsx_tag_end(bytes: &[u8]) -> Option<usize> {
     None // Unclosed tag
 }
 
-// Public scanners
-
-/// Scan for an MDX ESM line (`import ...` or `export ...`).
-/// Returns the byte offset past the end of the line (including newline) if matched.
+/// Scan for an MDX ESM block (`import ...` or `export ...`).
+///
+/// Greedily consumes all non-blank continuation lines, matching the reference
+/// mdxjs behavior. The actual completeness check is done later by the firstpass
+/// using oxc when a blank line is encountered.
+///
+/// Returns the byte offset past the end of the block (including trailing newline).
 pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
     let is_import = bytes.starts_with(b"import ")
         || bytes.starts_with(b"import\t")
@@ -162,7 +386,7 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
         return None;
     }
 
-    // Consume the rest of the line (and any continuation lines for multi-line imports).
+    // Greedily consume all non-blank continuation lines.
     let mut ix = 0;
     loop {
         // Find end of current line.
@@ -170,32 +394,11 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
             .map(|i| ix + i + 1)
             .unwrap_or(bytes.len());
         ix = eol;
-        // Check for continuation: next line that doesn't start a new block.
-        // Simple heuristic: line continuation if previous line ends with `,` or `{` or `(` or `from`
-        // before whitespace/newline, or next line starts with whitespace.
-        if ix < bytes.len() && (bytes[ix] == b' ' || bytes[ix] == b'\t') {
-            continue;
+
+        // Stop at EOF or blank line (line starting with \n or \r).
+        if ix >= bytes.len() || bytes[ix] == b'\n' || bytes[ix] == b'\r' {
+            break;
         }
-        // Also continue if the last non-whitespace char before the newline suggests continuation.
-        let prev_end = if ix >= 2 && bytes[ix - 2] == b'\r' {
-            ix - 2
-        } else {
-            ix - 1
-        };
-        let last_significant = bytes[..prev_end]
-            .iter()
-            .rposition(|&b| b != b' ' && b != b'\t');
-        if let Some(pos) = last_significant {
-            match bytes[pos] {
-                b',' | b'{' | b'(' => {
-                    if ix < bytes.len() {
-                        continue;
-                    }
-                }
-                _ => {}
-            }
-        }
-        break;
     }
     Some(ix)
 }
@@ -268,147 +471,33 @@ pub(crate) fn scan_mdx_jsx_block(bytes: &[u8]) -> Option<usize> {
     scan_to_line_end(bytes, pos)
 }
 
-/// Scan for an MDX expression block: `{...}` with balanced braces.
+/// Scan for an MDX expression block: `{...}` using lexer-based boundary detection.
 /// Returns byte offset past the end (including trailing newline).
 pub(crate) fn scan_mdx_expression_block(bytes: &[u8]) -> Option<usize> {
-    if bytes.is_empty() || bytes[0] != b'{' {
+    let mut ix = scan_mdx_expression_end(bytes)?;
+
+    // Block-level expression: only whitespace may follow on the line.
+    if !is_only_whitespace_to_eol(&bytes[ix..]) {
         return None;
     }
-
-    let mut ix = 1;
-    let mut depth: usize = 1;
-
-    while ix < bytes.len() && depth > 0 {
-        match bytes[ix] {
-            b'{' => {
-                depth += 1;
-                ix += 1;
-            }
-            b'}' => {
-                depth -= 1;
-                ix += 1;
-            }
-            b'"' => {
-                ix += 1;
-                while ix < bytes.len() && bytes[ix] != b'"' {
-                    if bytes[ix] == b'\\' {
-                        ix += 1;
-                    }
-                    ix += 1;
-                }
-                if ix < bytes.len() {
-                    ix += 1;
-                }
-            }
-            b'\'' => {
-                ix += 1;
-                while ix < bytes.len() && bytes[ix] != b'\'' {
-                    if bytes[ix] == b'\\' {
-                        ix += 1;
-                    }
-                    ix += 1;
-                }
-                if ix < bytes.len() {
-                    ix += 1;
-                }
-            }
-            b'`' => {
-                ix += 1;
-                while ix < bytes.len() && bytes[ix] != b'`' {
-                    ix += 1;
-                }
-                if ix < bytes.len() {
-                    ix += 1;
-                }
-            }
-            _ => ix += 1,
-        }
+    // Skip trailing whitespace and newline.
+    while ix < bytes.len() && (bytes[ix] == b' ' || bytes[ix] == b'\t') {
+        ix += 1;
     }
-
-    if depth == 0 {
-        // Block-level expression: only whitespace or JSX tags may follow.
-        // Multiple expressions on one line (like `{1} {2}`) should be inline.
-        if !is_only_whitespace_to_eol(&bytes[ix..]) {
-            return None;
-        }
-        // Skip newline
-        while ix < bytes.len() && (bytes[ix] == b' ' || bytes[ix] == b'\t') {
-            ix += 1;
-        }
-        if ix < bytes.len() && bytes[ix] == b'\r' {
-            ix += 1;
-        }
-        if ix < bytes.len() && bytes[ix] == b'\n' {
-            ix += 1;
-        }
-        Some(ix)
-    } else {
-        None
+    if ix < bytes.len() && bytes[ix] == b'\r' {
+        ix += 1;
     }
+    if ix < bytes.len() && bytes[ix] == b'\n' {
+        ix += 1;
+    }
+    Some(ix)
 }
 
-/// Scan an inline MDX expression: `{...}` with balanced braces.
+/// Scan an inline MDX expression: `{...}` using lexer-based boundary detection.
 /// Returns (content_start, content_end, total_len) where content excludes the outer braces.
 pub(crate) fn scan_mdx_inline_expression(bytes: &[u8]) -> Option<(usize, usize, usize)> {
-    if bytes.is_empty() || bytes[0] != b'{' {
-        return None;
-    }
-
-    let mut ix = 1;
-    let mut depth: usize = 1;
-
-    while ix < bytes.len() && depth > 0 {
-        match bytes[ix] {
-            b'{' => {
-                depth += 1;
-                ix += 1;
-            }
-            b'}' => {
-                depth -= 1;
-                ix += 1;
-            }
-            b'"' => {
-                ix += 1;
-                while ix < bytes.len() && bytes[ix] != b'"' {
-                    if bytes[ix] == b'\\' {
-                        ix += 1;
-                    }
-                    ix += 1;
-                }
-                if ix < bytes.len() {
-                    ix += 1;
-                }
-            }
-            b'\'' => {
-                ix += 1;
-                while ix < bytes.len() && bytes[ix] != b'\'' {
-                    if bytes[ix] == b'\\' {
-                        ix += 1;
-                    }
-                    ix += 1;
-                }
-                if ix < bytes.len() {
-                    ix += 1;
-                }
-            }
-            b'`' => {
-                ix += 1;
-                while ix < bytes.len() && bytes[ix] != b'`' {
-                    ix += 1;
-                }
-                if ix < bytes.len() {
-                    ix += 1;
-                }
-            }
-            _ => ix += 1,
-        }
-    }
-
-    if depth == 0 {
-        Some((1, ix - 1, ix))
-    } else {
-        None
-    }
+    let total = scan_mdx_expression_end(bytes)?;
+    Some((1, total - 1, total))
 }
 
 /// Scan an inline JSX tag from `<` to `>` or `/>`.
@@ -523,8 +612,6 @@ pub(crate) fn scan_mdx_inline_jsx(bytes: &[u8]) -> Option<usize> {
     None
 }
 
-// Block-level MDX parsers (methods on FirstPass)
-
 impl<'a, 'b> FirstPass<'a, 'b> {
     pub(crate) fn parse_mdx_esm(&mut self, start_ix: usize, end_ix: usize) -> usize {
         let content = &self.text[start_ix..end_ix].trim_end();
@@ -562,8 +649,6 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         end_ix
     }
 }
-
-// JSX tag parser: extracts name, attributes, and tag classification
 
 use crate::parse::{JsxAttr, JsxElementData};
 

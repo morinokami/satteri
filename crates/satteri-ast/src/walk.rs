@@ -464,8 +464,8 @@ fn serialize_node_inline(
             }
         }
 
-        // HAST text / comment / raw / MDX expressions
-        2 | 3 | 5 | 12 | 14 => {
+        // HAST text / comment / raw / MDX expressions / MDX ESM
+        2 | 3 | 5 | 12 | 13 | 14 => {
             if type_data.len() >= 8 {
                 let val_ref = read_string_ref(type_data, 0);
                 let val = arena.get_str(val_ref);

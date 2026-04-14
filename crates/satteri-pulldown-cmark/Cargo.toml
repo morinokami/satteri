@@ -17,6 +17,9 @@ pulldown-cmark-escape = { version = "0.11", optional = true }
 rustc-hash = "2"
 satteri-arena = { version = "0.1.1", path = "../satteri-arena" }
 satteri-ast = { version = "0.1.1", path = "../satteri-ast" }
+oxc_allocator = { workspace = true }
+oxc_parser = { workspace = true }
+oxc_span = { workspace = true }
 
 [features]
 default = ["std", "html"]

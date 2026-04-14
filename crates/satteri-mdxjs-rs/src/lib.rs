@@ -69,7 +69,7 @@ pub fn parse_expression_to_estree_json(source: &str) -> Option<String> {
 /// use satteri_mdxjs::compile;
 /// # fn main() -> Result<(), satteri_arena::mdx_types::Message> {
 ///
-/// let result = compile("# Hi!", &Default::default())?;
+/// let result = compile("# Hi!", &Default::default(), satteri_pulldown_cmark::MDX_OPTIONS)?;
 /// assert!(result.contains("function _createMdxContent"));
 /// # Ok(())
 /// # }
@@ -79,7 +79,11 @@ pub fn parse_expression_to_estree_json(source: &str) -> Option<String> {
 ///
 /// This project errors for many different reasons, such as syntax errors in
 /// the MDX format or misconfiguration.
-pub fn compile(value: &str, options: &Options) -> Result<String, message::Message> {
+pub fn compile(
+    value: &str,
+    options: &Options,
+    parse_options: satteri_pulldown_cmark::Options,
+) -> Result<String, message::Message> {
     let normalised;
     let value = if value.contains('\t') {
         normalised = expand_tabs(value);
@@ -87,8 +91,7 @@ pub fn compile(value: &str, options: &Options) -> Result<String, message::Messag
     } else {
         value
     };
-    let (arena, mdx_errors) =
-        satteri_pulldown_cmark::parse(value, satteri_pulldown_cmark::MDX_OPTIONS);
+    let (arena, mdx_errors) = satteri_pulldown_cmark::parse(value, parse_options);
     if let Some((offset, msg)) = mdx_errors.first() {
         let point = byte_offset_to_point(value, *offset);
         return Err(message::Message {

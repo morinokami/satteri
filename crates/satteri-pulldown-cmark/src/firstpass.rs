@@ -21,7 +21,7 @@ use crate::{
 
 /// Runs the first pass, which resolves the block structure of the document,
 /// and returns the resulting tree.
-pub(crate) fn run_first_pass(text: &str, options: Options) -> (Tree<Item>, Allocations<'_>) {
+pub(crate) fn run_first_pass(text: &str, options: Options) -> (Tree<Item>, Allocations<'_>, Vec<(usize, String)>) {
     // This is a very naive heuristic for the number of nodes
     // we'll need.
     let start_capacity = max(128, text.len() / 32);
@@ -36,6 +36,7 @@ pub(crate) fn run_first_pass(text: &str, options: Options) -> (Tree<Item>, Alloc
         lookup_table,
         brace_context_next: 0,
         brace_context_stack: Vec::new(),
+        mdx_errors: Vec::new(),
     };
     first_pass.run()
 }
@@ -63,10 +64,12 @@ pub(crate) struct FirstPass<'a, 'b> {
     /// Math environment brace nesting.
     brace_context_stack: Vec<u8>,
     brace_context_next: usize,
+    /// MDX errors collected during first pass.
+    pub(crate) mdx_errors: Vec<(usize, String)>,
 }
 
 impl<'a, 'b> FirstPass<'a, 'b> {
-    fn run(mut self) -> (Tree<Item>, Allocations<'a>) {
+    fn run(mut self) -> (Tree<Item>, Allocations<'a>, Vec<(usize, String)>) {
         let mut ix = 0;
         while ix < self.text.len() {
             ix = self.parse_block(ix);
@@ -74,7 +77,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         while self.tree.spine_len() > 0 {
             self.pop(ix);
         }
-        (self.tree, self.allocs)
+        (self.tree, self.allocs, self.mdx_errors)
     }
 
     /// Returns offset after block.
@@ -451,8 +454,63 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             // ESM is only valid at the document root (not inside containers).
             if indent == 0 && self.tree.spine_len() == 0 {
                 if let Some(end_ix) = scan_mdx_esm(&bytes[ix..]) {
+                    let mut final_end = end_ix;
+
+                    // If the scanned ESM block is incomplete (e.g. an export
+                    // spanning a blank line), retry across blank lines using
+                    // oxc — matching the reference mdxjs behavior.
+                    let candidate = self.text[ix..ix + final_end].trim_end();
+                    if !candidate.is_empty() {
+                        use crate::mdx::EsmParseResult;
+                        let mut allocator = oxc_allocator::Allocator::default();
+                        match crate::mdx::try_parse_esm(candidate, &mut allocator) {
+                            EsmParseResult::Complete => {}
+                            EsmParseResult::Incomplete => {
+                                let mut pos = ix + final_end;
+                                loop {
+                                    let blank_start = pos;
+                                    while pos < bytes.len()
+                                        && (bytes[pos] == b'\n'
+                                            || bytes[pos] == b'\r'
+                                            || bytes[pos] == b' '
+                                            || bytes[pos] == b'\t')
+                                    {
+                                        pos += 1;
+                                    }
+                                    if pos == blank_start || pos >= bytes.len() {
+                                        break;
+                                    }
+                                    let chunk_start = pos;
+                                    while pos < bytes.len() {
+                                        let eol = memchr::memchr(b'\n', &bytes[pos..])
+                                            .map(|i| pos + i + 1)
+                                            .unwrap_or(bytes.len());
+                                        pos = eol;
+                                        if pos < bytes.len()
+                                            && (bytes[pos] == b'\n' || bytes[pos] == b'\r')
+                                        {
+                                            break;
+                                        }
+                                    }
+                                    if pos == chunk_start {
+                                        break;
+                                    }
+                                    final_end = pos - ix;
+                                    let candidate =
+                                        self.text[ix..ix + final_end].trim_end();
+                                    match crate::mdx::try_parse_esm(candidate, &mut allocator) {
+                                        EsmParseResult::Complete => break,
+                                        EsmParseResult::Incomplete => continue,
+                                        EsmParseResult::Error => break,
+                                    }
+                                }
+                            }
+                            EsmParseResult::Error => {}
+                        }
+                    }
+
                     self.finish_list(start_ix);
-                    return self.parse_mdx_esm(ix, ix + end_ix);
+                    return self.parse_mdx_esm(ix, ix + final_end);
                 }
             }
 
@@ -469,6 +527,16 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 if let Some(end_ix) = scan_mdx_expression_block(&bytes[ix..]) {
                     self.finish_list(start_ix);
                     return self.parse_mdx_flow_expression(ix, ix + end_ix);
+                }
+                // If the inline scanner also can't find a closing `}`, it's truly unclosed.
+                // (If it CAN find one, the `{` will be handled as inline in a paragraph.)
+                if scan_mdx_inline_expression(&bytes[ix..]).is_none() {
+                    self.mdx_errors.push((
+                        ix,
+                        "Unexpected end of file in expression, expected a corresponding \
+                         closing brace for `{`"
+                            .to_string(),
+                    ));
                 }
             }
         }
@@ -1205,6 +1273,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                         begin_text = ix + total_len;
                         LoopInstruction::ContinueAndSkip(total_len - 1)
                     } else {
+                        // Unclosed expression.
+                        self.mdx_errors.push((
+                            ix,
+                            "Unexpected end of file in expression, expected a corresponding \
+                             closing brace for `{`"
+                                .to_string(),
+                        ));
                         LoopInstruction::ContinueAndSkip(0)
                     }
                 }

@@ -9,6 +9,17 @@ fn html(md: &str) -> String {
     mdast_to_html(&arena)
 }
 
+fn html_with(md: &str, opts: satteri_pulldown_cmark::Options) -> String {
+    let (arena, _errors) = satteri_pulldown_cmark::parse(md, opts);
+    mdast_to_html(&arena)
+}
+
+fn smart(md: &str) -> String {
+    let opts = satteri_pulldown_cmark::DEFAULT_OPTIONS
+        | satteri_pulldown_cmark::Options::ENABLE_SMART_PUNCTUATION;
+    html_with(md, opts)
+}
+
 #[test]
 fn heading_h1() {
     assert_eq!(html("# Heading 1"), "<h1>Heading 1</h1>\n");
@@ -148,5 +159,16 @@ fn multiple_paragraphs() {
     assert_eq!(
         html("First paragraph.\n\nSecond paragraph."),
         "<p>First paragraph.</p>\n<p>Second paragraph.</p>\n"
+    );
+}
+
+// Smart punctuation (arena pipeline: parse → mdast → hast → HTML)
+
+#[test]
+fn smart_punctuation() {
+    // Ellipsis, dashes, and curly quotes through the full arena path
+    assert_eq!(
+        smart("\"Hello,\" she said---it's an em-dash, an en--dash, and an ellipsis..."),
+        "<p>\u{201c}Hello,\u{201d} she said\u{2014}it\u{2019}s an em-dash, an en\u{2013}dash, and an ellipsis\u{2026}</p>\n"
     );
 }

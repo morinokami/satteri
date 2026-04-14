@@ -7,7 +7,7 @@ export {
   markdownToHast,
   mdxToHast,
 } from "./compile.js";
-export type { CompileOptions, MdxCompileOptions, OptimizeStaticConfig } from "./compile.js";
+export type { CompileOptions, MdxCompileOptions, OptimizeStaticConfig, Features } from "./compile.js";
 
 // Plugin definitions
 export { defineMdastPlugin, defineHastPlugin } from "./plugin.js";

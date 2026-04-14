@@ -351,4 +351,5 @@ export class HastReader {
     const ref = this.#readStringRef(data, 0);
     return this.getString(ref.offset, ref.len);
   }
+
 }

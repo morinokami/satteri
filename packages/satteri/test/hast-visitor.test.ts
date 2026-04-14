@@ -524,3 +524,39 @@ describe("MDX JSX attributes on HAST nodes", () => {
     });
   });
 });
+
+describe("mdxjsEsm visitor", () => {
+  test("mdxjsEsm callback receives import statement value", () => {
+    const handle = createMdxHastHandle("import Foo from './foo'\n\n# Hello\n");
+    const source = getHandleSource(handle);
+    const values: string[] = [];
+    const plugin = {
+      mdxjsEsm(node: HastNode) {
+        if ("value" in node && typeof node.value === "string") {
+          values.push(node.value);
+        }
+      },
+    };
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, "<test>");
+    expect(values.length).toBe(1);
+    expect(values[0]).toContain("import Foo from");
+  });
+
+  test("mdxjsEsm callback receives export statement value", () => {
+    const handle = createMdxHastHandle("export const x = 1\n\n# Hello\n");
+    const source = getHandleSource(handle);
+    const values: string[] = [];
+    const plugin = {
+      mdxjsEsm(node: HastNode) {
+        if ("value" in node && typeof node.value === "string") {
+          values.push(node.value);
+        }
+      },
+    };
+    const subs = resolveSubscriptions(plugin);
+    visitHastHandle(handle, plugin, subs, source, "<test>");
+    expect(values.length).toBe(1);
+    expect(values[0]).toContain("export const x");
+  });
+});

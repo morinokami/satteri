@@ -166,6 +166,46 @@ fn esm_export_styles() {
 }
 
 #[test]
+fn esm_multiline_export_object() {
+    // Multiline export with nested objects and arrays must be captured as a single ESM block.
+    let input = "export const data = {\n  users: [\n    { name: 'Alice', age: 30 },\n    { name: 'Bob', age: 25 }\n  ]\n};\n\n# Hello\n";
+    let ev = mdx_events(input);
+    assert!(
+        has(&ev, |e| matches!(e, Event::MdxEsm(s) if s.contains("data") && s.contains("}"))),
+        "multiline export object should be a single ESM block: {:?}",
+        ev
+    );
+    // The heading after the blank line should still be parsed as a heading.
+    assert!(has(&ev, |e| matches!(e, Event::Start(Tag::Heading { .. }))));
+}
+
+#[test]
+fn esm_multiline_export_array_ending() {
+    // Line ending with `]` should not break the ESM block if braces are still open.
+    let input = "export const x = {\n  items: [1, 2, 3]\n};\n";
+    let ev = mdx_events(input);
+    assert!(
+        has(&ev, |e| matches!(e, Event::MdxEsm(s) if s.contains("};"))),
+        "closing brace must be included: {:?}",
+        ev
+    );
+}
+
+#[test]
+fn esm_export_spanning_blank_line() {
+    // An export with a blank line in the middle should still be captured
+    // as a single ESM block (oxc detects the incomplete parse and retries).
+    let input = "export const x = {\n  a: 1,\n\n  b: 2\n};\n\n# Hello\n";
+    let ev = mdx_events(input);
+    assert!(
+        has(&ev, |e| matches!(e, Event::MdxEsm(s) if s.contains("b: 2") && s.contains("};"))) ,
+        "export spanning blank line should be a single ESM block: {:?}",
+        ev
+    );
+    assert!(has(&ev, |e| matches!(e, Event::Start(Tag::Heading { .. }))));
+}
+
+#[test]
 fn esm_not_in_paragraph() {
     // Import/export inside a paragraph (not interrupting) should not be ESM.
     let ev = mdx_events("a\nimport a from 'b'\n");
@@ -220,10 +260,10 @@ fn expr_flow_empty() {
 
 #[test]
 fn expr_flow_nested_braces() {
-    let ev = mdx_events("{a { b }}\n");
+    let ev = mdx_events("{a({b: 1})}\n");
     assert!(has(
         &ev,
-        |e| matches!(e, Event::MdxFlowExpression(s) if s.as_ref() == "a { b }")
+        |e| matches!(e, Event::MdxFlowExpression(s) if s.as_ref() == "a({b: 1})")
     ));
 }
 
@@ -308,11 +348,11 @@ fn expr_text_empty() {
 
 #[test]
 fn expr_text_nested() {
-    let ev = mdx_events("a {b { c }} d");
+    let ev = mdx_events("a {b({c: 1})} d");
     assert!(
         has(
             &ev,
-            |e| matches!(e, Event::MdxTextExpression(s) if s.as_ref() == "b { c }")
+            |e| matches!(e, Event::MdxTextExpression(s) if s.as_ref() == "b({c: 1})")
         ),
         "nested inline expression: {:?}",
         ev
@@ -410,6 +450,48 @@ fn expr_text_function() {
             |e| matches!(e, Event::MdxTextExpression(s) if s.as_ref() == "function () {}")
         ),
         "function in expression: {:?}",
+        ev
+    );
+}
+
+#[test]
+fn expr_text_comment_with_braces() {
+    // Braces inside block comments should not affect expression boundary.
+    let ev = mdx_events("a {/* } */} b");
+    assert!(
+        has(
+            &ev,
+            |e| matches!(e, Event::MdxTextExpression(s) if s.as_ref() == "/* } */")
+        ),
+        "comment with braces: {:?}",
+        ev
+    );
+}
+
+#[test]
+fn expr_text_string_with_brace() {
+    // Closing brace inside a string should not end the expression.
+    let ev = mdx_events("a {\"}\"}  b");
+    assert!(
+        has(
+            &ev,
+            |e| matches!(e, Event::MdxTextExpression(s) if s.as_ref() == "\"}\"")
+        ),
+        "string with brace: {:?}",
+        ev
+    );
+}
+
+#[test]
+fn expr_text_template_literal() {
+    // Template literal with nested ${} and braces.
+    let ev = mdx_events("a {`${x}`} b");
+    assert!(
+        has(
+            &ev,
+            |e| matches!(e, Event::MdxTextExpression(s) if s.as_ref() == "`${x}`")
+        ),
+        "template literal: {:?}",
         ev
     );
 }

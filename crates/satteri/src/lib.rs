@@ -15,5 +15,6 @@ pub fn markdown_to_html(source: &str) -> String {
 
 /// Compile MDX source directly to JavaScript.
 pub fn compile_mdx(source: &str, options: &satteri_mdxjs::Options) -> Result<String, String> {
-    satteri_mdxjs::compile(source, options).map_err(|e| e.to_string())
+    satteri_mdxjs::compile(source, options, satteri_pulldown_cmark::MDX_OPTIONS)
+        .map_err(|e| e.to_string())
 }
