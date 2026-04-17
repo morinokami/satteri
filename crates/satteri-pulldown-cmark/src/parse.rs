@@ -1544,6 +1544,13 @@ impl<'input> ParserInner<'input> {
             self.tree[open].item.end = self.tree[close].item.end;
             self.tree[open].next = self.tree[close].next;
         }
+
+        // MDX: errors recorded in pass 1 for `{` inside what turned out to be a
+        // code span are false positives — the `{` is literal text.
+        if !self.mdx_errors.is_empty() {
+            self.mdx_errors
+                .retain(|(offset, _)| *offset < span_start || *offset >= span_end);
+        }
     }
 
     /// On success, returns a buffer containing the inline html and byte offset.

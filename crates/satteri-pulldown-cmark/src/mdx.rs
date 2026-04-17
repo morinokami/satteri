@@ -130,13 +130,34 @@ fn scan_regex(bytes: &[u8], start: usize) -> usize {
     ix
 }
 
+/// Is the byte at `ix` a line ending followed by a blank line (or EOF)?
+///
+/// Used to cut the expression scan at block boundaries, so an unclosed `{`
+/// can't silently consume subsequent blocks.
+fn is_blank_line_next(bytes: &[u8], ix: usize) -> bool {
+    let mut j = ix + 1;
+    if bytes[ix] == b'\r' && j < bytes.len() && bytes[j] == b'\n' {
+        j += 1;
+    }
+    let mut k = j;
+    while k < bytes.len() && (bytes[k] == b' ' || bytes[k] == b'\t') {
+        k += 1;
+    }
+    k >= bytes.len() || bytes[k] == b'\n' || bytes[k] == b'\r'
+}
+
 /// Scan an MDX expression `{...}`, finding the matching closing `}`.
 ///
 /// Uses a lightweight JS lexer that properly handles strings, comments,
 /// template literals, and regex literals. MDX expressions are rarely complex, so this should cover the vast majority of cases without needing a parser. I kinda wish oxc's exposed his lexer, though.
 ///
+/// When `inline` is true, blank lines abort the scan — inline (text)
+/// expressions must stay within a single paragraph, so the parser can't let
+/// an unclosed `{` silently consume later blocks. Flow (block) expressions
+/// are allowed to span blank lines.
+///
 /// Returns the byte offset past the closing `}`, or `None` if unclosed.
-fn scan_mdx_expression_end(bytes: &[u8]) -> Option<usize> {
+fn scan_mdx_expression_end(bytes: &[u8], inline: bool) -> Option<usize> {
     if bytes.is_empty() || bytes[0] != b'{' {
         return None;
     }
@@ -146,6 +167,12 @@ fn scan_mdx_expression_end(bytes: &[u8]) -> Option<usize> {
 
     while ix < bytes.len() && depth > 0 {
         match bytes[ix] {
+            b'\n' | b'\r' => {
+                if inline && is_blank_line_next(bytes, ix) {
+                    return None;
+                }
+                ix += 1;
+            }
             b'{' => {
                 depth += 1;
                 ix += 1;
@@ -175,7 +202,7 @@ fn scan_mdx_expression_end(bytes: &[u8]) -> Option<usize> {
                     ix += 1;
                 }
             }
-            // Template literals with ${} nesting
+            // Template literals with ${} nesting.
             b'`' => {
                 ix += 1;
                 let mut template_depth: usize = 0;
@@ -196,6 +223,11 @@ fn scan_mdx_expression_end(bytes: &[u8]) -> Option<usize> {
                         }
                         b'{' if template_depth > 0 => template_depth += 1,
                         b'}' if template_depth > 0 => template_depth -= 1,
+                        b'\n' | b'\r' if inline => {
+                            if is_blank_line_next(bytes, ix) {
+                                return None;
+                            }
+                        }
                         _ => {}
                     }
                     ix += 1;
@@ -208,13 +240,19 @@ fn scan_mdx_expression_end(bytes: &[u8]) -> Option<usize> {
                     ix += 1;
                 }
             }
-            // Block comment
+            // Block comment.
             b'/' if ix + 1 < bytes.len() && bytes[ix + 1] == b'*' => {
                 ix += 2;
                 while ix + 1 < bytes.len() {
                     if bytes[ix] == b'*' && bytes[ix + 1] == b'/' {
                         ix += 2;
                         break;
+                    }
+                    if inline
+                        && (bytes[ix] == b'\n' || bytes[ix] == b'\r')
+                        && is_blank_line_next(bytes, ix)
+                    {
+                        return None;
                     }
                     ix += 1;
                 }
@@ -325,7 +363,8 @@ fn scan_mdx_jsx_tag_end(bytes: &[u8]) -> Option<usize> {
             }
             b'{' => {
                 // Attribute expression — use lexer to find the matching `}`.
-                let expr_len = scan_mdx_expression_end(&bytes[ix..])?;
+                // JSX attributes live inside a tag, so blank lines abort.
+                let expr_len = scan_mdx_expression_end(&bytes[ix..], true)?;
                 ix += expr_len;
             }
             b'"' => {
@@ -490,7 +529,7 @@ pub(crate) fn scan_mdx_jsx_block(bytes: &[u8]) -> Option<usize> {
 /// Scan for an MDX expression block: `{...}` using lexer-based boundary detection.
 /// Returns byte offset past the end (including trailing newline).
 pub(crate) fn scan_mdx_expression_block(bytes: &[u8]) -> Option<usize> {
-    let mut ix = scan_mdx_expression_end(bytes)?;
+    let mut ix = scan_mdx_expression_end(bytes, false)?;
 
     // Block-level expression: only whitespace may follow on the line.
     if !is_only_whitespace_to_eol(&bytes[ix..]) {
@@ -512,7 +551,7 @@ pub(crate) fn scan_mdx_expression_block(bytes: &[u8]) -> Option<usize> {
 /// Scan an inline MDX expression: `{...}` using lexer-based boundary detection.
 /// Returns (content_start, content_end, total_len) where content excludes the outer braces.
 pub(crate) fn scan_mdx_inline_expression(bytes: &[u8]) -> Option<(usize, usize, usize)> {
-    let total = scan_mdx_expression_end(bytes)?;
+    let total = scan_mdx_expression_end(bytes, true)?;
     Some((1, total - 1, total))
 }
 

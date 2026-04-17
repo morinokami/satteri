@@ -1365,3 +1365,101 @@ fn expression_with_double_quote_string() {
         }
     }
 }
+
+/// An unbalanced `{` inside an inline code span must not bubble up as an MDX
+/// expression error — `@mdx-js/mdx` treats the backticks as authoritative and
+/// the `{` as literal text.
+#[test]
+fn inline_code_with_unbalanced_brace_is_literal() {
+    let events = mdx_events("`{`\n");
+    assert!(
+        has(&events, |e| matches!(e, Event::Code(c) if c.as_ref() == "{")),
+        "expected Code(\"{{\"): {:?}",
+        events
+    );
+    assert!(
+        !has(&events, |e| matches!(e, Event::MdxTextExpression(_))),
+        "must not emit MdxTextExpression for `{{` in code span: {:?}",
+        events
+    );
+}
+
+/// Balanced `{...}` inside a code span stays literal too — the whole thing is
+/// one `Code` event, no `MdxTextExpression` leaks out.
+#[test]
+fn inline_code_with_balanced_braces_is_literal() {
+    let events = mdx_events("`a { b }`\n");
+    assert!(
+        has(&events, |e| matches!(e, Event::Code(c) if c.as_ref() == "a { b }")),
+        "expected single Code event: {:?}",
+        events
+    );
+    assert!(
+        !has(&events, |e| matches!(e, Event::MdxTextExpression(_))),
+        "must not emit MdxTextExpression inside code span: {:?}",
+        events
+    );
+}
+
+/// A code span with unbalanced `{` followed by unrelated blocks (the original
+/// cloudflare-docs bug) must not scan an expression across paragraphs.
+#[test]
+fn inline_code_with_unbalanced_brace_does_not_cross_blocks() {
+    let input = "`){`\n\n```\nhttps://x {\n}\n```\n";
+    let events = mdx_events(input);
+    assert!(
+        !has(&events, |e| matches!(e, Event::MdxTextExpression(_))),
+        "unbalanced `{{` in code span must not match `}}` in a later block: {:?}",
+        events
+    );
+}
+
+/// Inline text expressions can't cross a paragraph boundary — a blank line
+/// before the closing `}` aborts the scan.
+#[test]
+fn inline_expression_aborts_on_blank_line() {
+    let events = mdx_events("text {a\n\n} text\n");
+    assert!(
+        !has(&events, |e| matches!(e, Event::MdxTextExpression(_))),
+        "expression must not span a blank line in inline context: {:?}",
+        events
+    );
+}
+
+/// Flow (block-level) expressions, by contrast, *can* span blank lines —
+/// `@mdx-js/mdx` accepts `{\n\n}` at block level.
+#[test]
+fn flow_expression_allows_blank_line() {
+    let events = mdx_events("{\n\n}\n");
+    assert!(
+        has(&events, |e| matches!(e, Event::MdxFlowExpression(_))),
+        "flow expression must tolerate blank line: {:?}",
+        events
+    );
+}
+
+/// A template literal with a blank line inside it is valid at flow level
+/// (mdx-js accepts it). Regression guard for the blank-line check leaking
+/// into the `inline=false` path.
+#[test]
+fn flow_expression_template_literal_allows_blank_line() {
+    let events = mdx_events("{`multi\n\nline`}\n");
+    assert!(
+        has(&events, |e| matches!(e, Event::MdxFlowExpression(c) if c.as_ref().contains("multi"))),
+        "flow expression with multi-line template must parse: {:?}",
+        events
+    );
+}
+
+/// In inline context, the blank-line bail also applies inside template
+/// literals — otherwise an accidental backtick (e.g., the close of a code
+/// span) can make the scanner skip past paragraph breaks.
+#[test]
+fn inline_expression_template_literal_aborts_on_blank_line() {
+    let events = mdx_events("text {`multi\n\nline`} text\n");
+    assert!(
+        !has(&events, |e| matches!(e, Event::MdxTextExpression(_))),
+        "inline expression with blank-line template must abort: {:?}",
+        events
+    );
+}
