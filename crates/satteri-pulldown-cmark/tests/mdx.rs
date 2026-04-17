@@ -1373,7 +1373,10 @@ fn expression_with_double_quote_string() {
 fn inline_code_with_unbalanced_brace_is_literal() {
     let events = mdx_events("`{`\n");
     assert!(
-        has(&events, |e| matches!(e, Event::Code(c) if c.as_ref() == "{")),
+        has(
+            &events,
+            |e| matches!(e, Event::Code(c) if c.as_ref() == "{")
+        ),
         "expected Code(\"{{\"): {:?}",
         events
     );
@@ -1390,7 +1393,10 @@ fn inline_code_with_unbalanced_brace_is_literal() {
 fn inline_code_with_balanced_braces_is_literal() {
     let events = mdx_events("`a { b }`\n");
     assert!(
-        has(&events, |e| matches!(e, Event::Code(c) if c.as_ref() == "a { b }")),
+        has(
+            &events,
+            |e| matches!(e, Event::Code(c) if c.as_ref() == "a { b }")
+        ),
         "expected single Code event: {:?}",
         events
     );
@@ -1445,7 +1451,10 @@ fn flow_expression_allows_blank_line() {
 fn flow_expression_template_literal_allows_blank_line() {
     let events = mdx_events("{`multi\n\nline`}\n");
     assert!(
-        has(&events, |e| matches!(e, Event::MdxFlowExpression(c) if c.as_ref().contains("multi"))),
+        has(
+            &events,
+            |e| matches!(e, Event::MdxFlowExpression(c) if c.as_ref().contains("multi"))
+        ),
         "flow expression with multi-line template must parse: {:?}",
         events
     );
