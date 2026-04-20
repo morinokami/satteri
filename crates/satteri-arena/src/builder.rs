@@ -220,6 +220,39 @@ impl ArenaBuilder {
         self.stack.get(depth).map(|(id, _)| *id)
     }
 
+    pub fn last_sibling_id(&self) -> Option<u32> {
+        let children_start = self.stack.last().map(|(_, cs)| *cs as usize).unwrap_or(0);
+        if self.pending_children.len() > children_start {
+            self.pending_children.last().copied()
+        } else {
+            None
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_leaf_full(
+        &mut self,
+        node_id: u32,
+        start_offset: u32,
+        end_offset: u32,
+        start_line: u32,
+        start_column: u32,
+        end_line: u32,
+        end_column: u32,
+        data: &[u8],
+    ) {
+        let node = &mut self.arena.nodes[node_id as usize];
+        node.start_offset = start_offset;
+        node.end_offset = end_offset;
+        node.start_line = start_line;
+        node.start_column = start_column;
+        node.end_line = end_line;
+        node.end_column = end_column;
+        node.data_offset = self.arena.type_data.len() as u32;
+        node.data_len = data.len() as u32;
+        self.arena.type_data.extend_from_slice(data);
+    }
+
     pub fn arena_ref(&self) -> &Arena {
         &self.arena
     }

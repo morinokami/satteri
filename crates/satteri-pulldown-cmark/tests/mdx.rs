@@ -819,33 +819,16 @@ fn jsx_then_expression_same_line_is_inline() {
 }
 
 #[test]
-fn jsx_opening_then_inline_expr_is_text() {
-    // `<Foo>{x}</Foo>` on one line is NOT a single flow element — the `{x}` is
-    // body. It must fall through to paragraph parsing as `MdxJsxTextElement`
-    // with an `MdxTextExpression` child.
+fn jsx_opening_with_expr_child_is_flow() {
+    // `<Foo>{x}</Foo>` on one line: body contains only expressions/JSX, so
+    // it's a flow element (matching remark-mdx behavior).
     let ev = mdx_events("<Foo>{x}</Foo>\n");
     assert!(
         has(
             &ev,
-            |e| matches!(e, Event::Start(Tag::MdxJsxTextElement(s)) if s.contains("Foo"))
+            |e| matches!(e, Event::Start(Tag::MdxJsxFlowElement(s)) if s.contains("Foo"))
         ),
-        "should be inline (text) element, not flow: {:?}",
-        ev
-    );
-    assert!(
-        has(
-            &ev,
-            |e| matches!(e, Event::MdxTextExpression(s) if s.as_ref() == "x")
-        ),
-        "inline expression child must be preserved: {:?}",
-        ev
-    );
-    assert!(
-        !has(&ev, |e| matches!(
-            e,
-            Event::Start(Tag::MdxJsxFlowElement(_))
-        )),
-        "should not be a flow element: {:?}",
+        "should be a flow element: {:?}",
         ev
     );
 }

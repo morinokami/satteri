@@ -181,8 +181,8 @@ fn task_list_mixed() {
     assert_eq!(
         html("- [x] done\n- [ ] todo"),
         "<ul class=\"contains-task-list\">\n\
-         <li class=\"task-list-item\"><input type=\"checkbox\" disabled checked>done</li>\n\
-         <li class=\"task-list-item\"><input type=\"checkbox\" disabled>todo</li>\n\
+         <li class=\"task-list-item\"><input type=\"checkbox\" disabled checked> done</li>\n\
+         <li class=\"task-list-item\"><input type=\"checkbox\" disabled> todo</li>\n\
          </ul>\n"
     );
 }

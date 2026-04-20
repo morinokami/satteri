@@ -154,6 +154,9 @@ impl ItemBody {
                 | MaybeImage
         )
     }
+    pub(crate) fn is_block_level(&self) -> bool {
+        !self.is_inline() && !matches!(self, ItemBody::Root)
+    }
     fn is_inline(&self) -> bool {
         use ItemBody::*;
         matches!(
@@ -2111,6 +2114,17 @@ pub(crate) enum JsxAttr<'a> {
     Spread(CowStr<'a>),
 }
 
+impl<'a> JsxAttr<'a> {
+    pub fn into_static(self) -> JsxAttr<'static> {
+        match self {
+            JsxAttr::Boolean(n) => JsxAttr::Boolean(n.into_static()),
+            JsxAttr::Literal(n, v) => JsxAttr::Literal(n.into_static(), v.into_static()),
+            JsxAttr::Expression(n, v) => JsxAttr::Expression(n.into_static(), v.into_static()),
+            JsxAttr::Spread(v) => JsxAttr::Spread(v.into_static()),
+        }
+    }
+}
+
 /// Pre-parsed JSX element data (name + attributes + tag classification).
 #[derive(Debug, Clone)]
 pub(crate) struct JsxElementData<'a> {
@@ -2119,6 +2133,18 @@ pub(crate) struct JsxElementData<'a> {
     pub raw: CowStr<'a>,
     pub is_closing: bool,
     pub is_self_closing: bool,
+}
+
+impl<'a> JsxElementData<'a> {
+    pub fn into_static(self) -> JsxElementData<'static> {
+        JsxElementData {
+            name: self.name.into_static(),
+            attrs: self.attrs.into_iter().map(|a| a.into_static()).collect(),
+            raw: self.raw.into_static(),
+            is_closing: self.is_closing,
+            is_self_closing: self.is_self_closing,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -2823,9 +2849,10 @@ mod test {
             })
             .nth(4)
             .unwrap();
-        let expected_offset_start = "a|b|c\n--|--|--\na|".len();
+        // Cell span includes the leading `|` delimiter (matching remark).
+        let expected_offset_start = "a|b|c\n--|--|--\na".len();
         assert_eq!(
-            expected_offset_start..(expected_offset_start + 2),
+            expected_offset_start..(expected_offset_start + 3),
             event_offset
         );
     }

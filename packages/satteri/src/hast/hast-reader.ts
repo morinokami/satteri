@@ -252,7 +252,7 @@ export class HastReader {
           properties.push({ name, value: true });
           break;
         case PROP_BOOL_FALSE:
-          // skip false booleans
+          properties.push({ name, value: false });
           break;
         case PROP_STRING:
           properties.push({ name, value: this.getString(valueRef.offset, valueRef.len) });

@@ -40,7 +40,7 @@ export const TYPE_NAMES: Record<number, string> = {
 };
 
 // Leaf node types that do NOT have children
-const LEAF_TYPES = new Set([10, 13, 7, 8, 14, 3, 20, 25, 26, 27, 28, 102, 103, 104]);
+const LEAF_TYPES = new Set([10, 13, 7, 8, 14, 3, 16, 20, 25, 26, 27, 28, 102, 103, 104]);
 
 /**
  * Add type-specific lazy properties to a node object.

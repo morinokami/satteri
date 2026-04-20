@@ -62,7 +62,7 @@ pub(crate) struct FirstPass<'a, 'b> {
     begin_list_item: Option<usize>,
     last_line_blank: bool,
     pub(crate) allocs: Allocations<'a>,
-    options: Options,
+    pub(crate) options: Options,
     lookup_table: &'b LookupTable,
     /// Math environment brace nesting.
     brace_context_stack: Vec<u8>,
@@ -431,7 +431,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 self.finish_list(start_ix);
                 let ix = start_ix + line_start.bytes_scanned();
                 let remaining_space = line_start.remaining_space();
-                return self.parse_indented_code_block(ix, remaining_space);
+                return self.parse_indented_code_block(start_ix, ix, remaining_space);
             }
         }
 
@@ -518,7 +518,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
             // MDX JSX flow: line starting with `<` followed by component name or fragment
             if bytes[ix] == b'<' {
-                if let Some(end_ix) = scan_mdx_jsx_block(&bytes[ix..]) {
+                if let Some(end_ix) =
+                    self.scan_mdx_flow_in_container(ix, |b, c| scan_mdx_jsx_block(b, c))
+                {
                     self.finish_list(start_ix);
                     return self.parse_mdx_jsx_flow(ix, ix + end_ix);
                 }
@@ -526,7 +528,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
 
             // MDX expression flow: line starting with `{`
             if bytes[ix] == b'{' {
-                if let Some(end_ix) = scan_mdx_expression_block(&bytes[ix..]) {
+                if let Some(end_ix) =
+                    self.scan_mdx_flow_in_container(ix, |b, c| scan_mdx_expression_block(b, c))
+                {
                     self.finish_list(start_ix);
                     return self.parse_mdx_flow_expression(ix, ix + end_ix);
                 }
@@ -722,8 +726,9 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         self.tree.push();
 
         loop {
+            let cell_start = ix;
             ix += scan_ch(&bytes[ix..], b'|');
-            let start_ix = ix;
+            let _start_ix = ix;
             ix += scan_whitespace_no_nl(&bytes[ix..]);
 
             if let Some(eol_bytes) = scan_eol(&bytes[ix..]) {
@@ -732,7 +737,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
             }
 
             let cell_ix = self.tree.append(Item {
-                start: start_ix,
+                start: cell_start,
                 end: ix,
                 body: ItemBody::TableCell,
             });
@@ -769,6 +774,22 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 end: ix,
                 body: ItemBody::TableCell,
             });
+        }
+
+        // Extend the last cell's end to include the trailing `|` and
+        // whitespace, matching remark's convention.
+        if let Some(cell_ix) = final_cell_ix {
+            let row_end = ix;
+            let mut cell_end = self.tree[cell_ix].item.end;
+            let bytes = self.text.as_bytes();
+            while cell_end < row_end
+                && cell_end < bytes.len()
+                && bytes[cell_end] != b'\n'
+                && bytes[cell_end] != b'\r'
+            {
+                cell_end += 1;
+            }
+            self.tree[cell_ix].item.end = cell_end;
         }
 
         // drop excess cells
@@ -1260,9 +1281,13 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                 }
                 b'{' if self.options.contains(Options::ENABLE_MDX) => {
                     // MDX inline expression: try to scan balanced braces.
-                    if let Some((content_start, content_end, total_len)) =
+                    let scan_result = if self.tree.spine_len() > 0 {
+                        let check = self.make_container_line_check();
+                        scan_mdx_inline_expression_in_container(&bytes[ix..], &check)
+                    } else {
                         scan_mdx_inline_expression(&bytes[ix..])
-                    {
+                    };
+                    if let Some((content_start, content_end, total_len)) = scan_result {
                         self.tree.append_text(begin_text, ix, backslash_escaped);
                         backslash_escaped = false;
                         let content = &self.text[ix + content_start..ix + content_end];
@@ -1607,9 +1632,14 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         ix
     }
 
-    fn parse_indented_code_block(&mut self, start_ix: usize, mut remaining_space: usize) -> usize {
+    fn parse_indented_code_block(
+        &mut self,
+        line_start_ix: usize,
+        start_ix: usize,
+        mut remaining_space: usize,
+    ) -> usize {
         self.tree.append(Item {
-            start: start_ix,
+            start: line_start_ix,
             end: 0, // will get set later
             body: ItemBody::IndentCodeBlock,
         });
@@ -2467,7 +2497,7 @@ fn scan_paragraph_interrupt_no_table(
         || bytes.starts_with(b"<")
             && (get_html_end_tag(&bytes[1..]).is_some() || starts_html_block_type_6(&bytes[1..]))
         // MDX JSX flow elements also interrupt paragraphs
-        || (mdx && bytes.starts_with(b"<") && scan_mdx_jsx_block(bytes).is_some())
+        || (mdx && bytes.starts_with(b"<") && scan_mdx_jsx_block(bytes, None).is_some())
         || definition_list
             && ((current_container
                 && tree.peek_up().is_some_and(|cur| {
@@ -2713,10 +2743,15 @@ fn special_bytes(options: &Options) -> [bool; 256] {
         bytes[b'{' as usize] = true;
         bytes[b'}' as usize] = true;
     }
-    if options.contains(Options::ENABLE_SMART_PUNCTUATION) {
-        for &byte in b".-\"'" {
-            bytes[byte as usize] = true;
-        }
+    if options.has_smart_ellipses() {
+        bytes[b'.' as usize] = true;
+    }
+    if options.has_smart_dashes() {
+        bytes[b'-' as usize] = true;
+    }
+    if options.has_smart_quotes() {
+        bytes[b'"' as usize] = true;
+        bytes[b'\'' as usize] = true;
     }
 
     bytes
@@ -2959,10 +2994,15 @@ mod simd {
             add_lookup_byte(&mut lookup, b'{');
             add_lookup_byte(&mut lookup, b'}');
         }
-        if options.contains(Options::ENABLE_SMART_PUNCTUATION) {
-            for &byte in &[b'.', b'-', b'"', b'\''] {
-                add_lookup_byte(&mut lookup, byte);
-            }
+        if options.has_smart_ellipses() {
+            add_lookup_byte(&mut lookup, b'.');
+        }
+        if options.has_smart_dashes() {
+            add_lookup_byte(&mut lookup, b'-');
+        }
+        if options.has_smart_quotes() {
+            add_lookup_byte(&mut lookup, b'"');
+            add_lookup_byte(&mut lookup, b'\'');
         }
 
         lookup

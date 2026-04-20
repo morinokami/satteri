@@ -1,5 +1,4 @@
 import {
-  type Features,
   type MdxCompileOptions,
   type MdastPluginDefinition,
   type HastPluginDefinition,
@@ -68,6 +67,7 @@ const mdxJsxRuntime = $<HTMLSelectElement>("#mdx-jsx-runtime");
 const mdxJsx = $<HTMLInputElement>("#mdx-jsx");
 const mdxDevelopment = $<HTMLInputElement>("#mdx-development");
 const mdxProviderImportSource = $<HTMLInputElement>("#mdx-provider-import-source");
+const mdxOutputFormat = $<HTMLSelectElement>("#mdx-output-format");
 const featGfm = $<HTMLInputElement>("#feat-gfm");
 const featFrontmatter = $<HTMLInputElement>("#feat-frontmatter");
 const featMath = $<HTMLInputElement>("#feat-math");
@@ -77,6 +77,10 @@ const featSuperscript = $<HTMLInputElement>("#feat-superscript");
 const featSubscript = $<HTMLInputElement>("#feat-subscript");
 const featWikilinks = $<HTMLInputElement>("#feat-wikilinks");
 const featSmartPunctuation = $<HTMLInputElement>("#feat-smart-punctuation");
+const smartPunctOptions = $<HTMLFieldSetElement>("#smart-punct-options");
+const featSmartQuotes = $<HTMLInputElement>("#feat-smart-quotes");
+const featSmartDashes = $<HTMLInputElement>("#feat-smart-dashes");
+const featSmartEllipses = $<HTMLInputElement>("#feat-smart-ellipses");
 const featDefinitionList = $<HTMLInputElement>("#feat-definition-list");
 
 let currentMode: Mode = "markdown";
@@ -158,7 +162,7 @@ function getMode(): Mode {
   return $<HTMLInputElement>('input[name="mode"]:checked').value as Mode;
 }
 
-function getFeatures(): Features {
+function getFeatures() {
   return {
     gfm: featGfm.checked,
     frontmatter: featFrontmatter.checked,
@@ -169,6 +173,14 @@ function getFeatures(): Features {
     subscript: featSubscript.checked,
     wikilinks: featWikilinks.checked,
     smartPunctuation: featSmartPunctuation.checked,
+    ...(featSmartPunctuation.checked &&
+      !(featSmartQuotes.checked && featSmartDashes.checked && featSmartEllipses.checked) && {
+        smartPunctuationOptions: {
+          quotes: featSmartQuotes.checked,
+          dashes: featSmartDashes.checked,
+          ellipses: featSmartEllipses.checked,
+        },
+      }),
     definitionList: featDefinitionList.checked,
   };
 }
@@ -184,6 +196,8 @@ function getMdxOptions() {
   if (mdxDevelopment.checked) result.development = true;
   const providerImportSource = mdxProviderImportSource.value.trim();
   if (providerImportSource) result.providerImportSource = providerImportSource;
+  const outputFormat = mdxOutputFormat.value;
+  if (outputFormat !== "program") result.outputFormat = outputFormat;
 
   const os = getOptimizeStatic();
   if (os) result.optimizeStatic = os;
@@ -506,11 +520,18 @@ document.querySelectorAll('input[name="mode"]').forEach((el) => {
   featDefinitionList,
 ].forEach((el) => el.addEventListener("change", scheduleCompile));
 
+featSmartPunctuation.addEventListener("change", () => {
+  smartPunctOptions.classList.toggle("hidden", !featSmartPunctuation.checked);
+});
+[featSmartQuotes, featSmartDashes, featSmartEllipses].forEach((el) =>
+  el.addEventListener("change", scheduleCompile),
+);
+
 // MDX options
 [mdxJsxImportSource, mdxProviderImportSource].forEach((el) => {
   el.addEventListener("input", scheduleCompile);
 });
-[mdxJsxRuntime, mdxJsx, mdxDevelopment].forEach((el) => {
+[mdxJsxRuntime, mdxJsx, mdxDevelopment, mdxOutputFormat].forEach((el) => {
   el.addEventListener("change", scheduleCompile);
 });
 

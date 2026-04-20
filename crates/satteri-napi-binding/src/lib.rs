@@ -5,6 +5,17 @@ use napi_derive::napi;
 
 // Parsing feature flags (JS-facing)
 
+/// Granular smart-punctuation toggles.
+#[napi(object)]
+pub struct JsSmartPunctuationOptions {
+    /// Replace straight quotes with curly/smart quotes. Default: true.
+    pub quotes: Option<bool>,
+    /// Replace `--`/`---` with en-dash/em-dash. Default: true.
+    pub dashes: Option<bool>,
+    /// Replace `...` with ellipsis (`…`). Default: true.
+    pub ellipses: Option<bool>,
+}
+
 /// Feature toggles for the Markdown/MDX parser, passed from JavaScript.
 #[napi(object)]
 pub struct JsFeatures {
@@ -25,8 +36,10 @@ pub struct JsFeatures {
     pub subscript: Option<bool>,
     /// Obsidian-style wikilinks (`[[link]]`). Default: false.
     pub wikilinks: Option<bool>,
-    /// Smart punctuation (ligatures, smart quotes). Default: false.
+    /// Smart punctuation: all categories on. Default: false.
     pub smart_punctuation: Option<bool>,
+    /// Granular smart-punctuation control (overrides `smart_punctuation`).
+    pub smart_punctuation_options: Option<JsSmartPunctuationOptions>,
     /// Definition lists. Default: false.
     pub definition_list: Option<bool>,
 }
@@ -44,6 +57,7 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
         subscript: None,
         wikilinks: None,
         smart_punctuation: None,
+        smart_punctuation_options: None,
         definition_list: None,
     });
 
@@ -78,7 +92,17 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
     if f.wikilinks.unwrap_or(false) {
         opts |= Options::ENABLE_WIKILINKS;
     }
-    if f.smart_punctuation.unwrap_or(false) {
+    if let Some(sp) = f.smart_punctuation_options {
+        if sp.quotes.unwrap_or(true) {
+            opts |= Options::ENABLE_SMART_QUOTES;
+        }
+        if sp.dashes.unwrap_or(true) {
+            opts |= Options::ENABLE_SMART_DASHES;
+        }
+        if sp.ellipses.unwrap_or(true) {
+            opts |= Options::ENABLE_SMART_ELLIPSES;
+        }
+    } else if f.smart_punctuation.unwrap_or(false) {
         opts |= Options::ENABLE_SMART_PUNCTUATION;
     }
     if f.definition_list.unwrap_or(false) {
@@ -129,6 +153,8 @@ pub struct JsMdxOptions {
     pub pragma_frag: Option<String>,
     /// Where to import the pragma from in classic runtime (default: "react").
     pub pragma_import_source: Option<String>,
+    /// Output format: "program" (default) or "function-body".
+    pub output_format: Option<String>,
 }
 
 fn js_options_to_rust(opts: Option<JsMdxOptions>) -> satteri_mdxjs::Options {
@@ -168,6 +194,12 @@ fn js_options_to_rust(opts: Option<JsMdxOptions>) -> satteri_mdxjs::Options {
         }
         if let Some(val) = js.pragma_import_source {
             options.pragma_import_source = Some(val);
+        }
+        if let Some(fmt) = js.output_format {
+            options.output_format = match fmt.as_str() {
+                "function-body" => satteri_mdxjs::OutputFormat::FunctionBody,
+                _ => satteri_mdxjs::OutputFormat::Program,
+            };
         }
     }
     options

@@ -2,6 +2,7 @@
 export {
   markdownToHtml,
   mdxToJs,
+  evaluate,
   markdownToMdast,
   mdxToMdast,
   markdownToHast,
@@ -10,8 +11,10 @@ export {
 export type {
   CompileOptions,
   MdxCompileOptions,
+  EvaluateOptions,
   OptimizeStaticConfig,
   Features,
+  SmartPunctuationOptions,
 } from "./compile.js";
 
 // Plugin definitions

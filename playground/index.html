@@ -37,6 +37,11 @@
           <label><input type="checkbox" id="feat-subscript" /> Subscript</label>
           <label><input type="checkbox" id="feat-wikilinks" /> Wikilinks</label>
           <label><input type="checkbox" id="feat-smart-punctuation" /> Smart punctuation</label>
+          <fieldset id="smart-punct-options" class="hidden" style="margin-left: 1.5em; border: none; padding: 0;">
+            <label><input type="checkbox" id="feat-smart-quotes" checked /> Quotes</label>
+            <label><input type="checkbox" id="feat-smart-dashes" checked /> Dashes</label>
+            <label><input type="checkbox" id="feat-smart-ellipses" checked /> Ellipses</label>
+          </fieldset>
           <label><input type="checkbox" id="feat-definition-list" /> Definition list</label>
         </fieldset>
 
@@ -64,6 +69,13 @@
           <label>
             providerImportSource
             <input type="text" id="mdx-provider-import-source" value="" placeholder="none" />
+          </label>
+          <label>
+            outputFormat
+            <select id="mdx-output-format">
+              <option value="program" selected>program</option>
+              <option value="function-body">function-body</option>
+            </select>
           </label>
         </fieldset>
 

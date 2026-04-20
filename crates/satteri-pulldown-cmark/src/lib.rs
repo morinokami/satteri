@@ -752,11 +752,18 @@ bitflags::bitflags! {
         /// Enables replacement of ASCII punctuation characters with
         /// Unicode ligatures and smart quotes.
         ///
-        /// This includes replacing `--` with `—`, `---` with `—`, `...` with `…`,
-        /// `"quote"` with `“quote”`, and `'quote'` with `‘quote’`.
+        /// This includes replacing `--` with `–`, `---` with `—`, `...` with `…`,
+        /// `”quote”` with `\u{201c}quote\u{201d}`, and `’quote’` with `\u{2018}quote\u{2019}`.
         ///
-        /// The replacement takes place during the parsing of the document.
+        /// Equivalent to enabling all of `ENABLE_SMART_QUOTES`,
+        /// `ENABLE_SMART_DASHES`, and `ENABLE_SMART_ELLIPSES`.
         const ENABLE_SMART_PUNCTUATION = 1 << 5;
+        /// Replace straight quotes (`”`, `’`) with curly/smart quotes.
+        const ENABLE_SMART_QUOTES = 1 << 18;
+        /// Replace `--` with en-dash and `---` with em-dash.
+        const ENABLE_SMART_DASHES = 1 << 19;
+        /// Replace `...` with ellipsis (`…`).
+        const ENABLE_SMART_ELLIPSES = 1 << 20;
         /// Extension to allow headings to have ID and classes.
         ///
         /// `# text { #id .class1 .class2 myattr other_attr=myvalue }`
@@ -827,4 +834,20 @@ impl Options {
     pub(crate) fn has_gfm_footnotes(&self) -> bool {
         self.contains(Options::ENABLE_FOOTNOTES) && !self.contains(Options::ENABLE_OLD_FOOTNOTES)
     }
+
+    pub(crate) fn has_smart_quotes(&self) -> bool {
+        self.contains(Options::ENABLE_SMART_PUNCTUATION)
+            || self.contains(Options::ENABLE_SMART_QUOTES)
+    }
+
+    pub(crate) fn has_smart_dashes(&self) -> bool {
+        self.contains(Options::ENABLE_SMART_PUNCTUATION)
+            || self.contains(Options::ENABLE_SMART_DASHES)
+    }
+
+    pub(crate) fn has_smart_ellipses(&self) -> bool {
+        self.contains(Options::ENABLE_SMART_PUNCTUATION)
+            || self.contains(Options::ENABLE_SMART_ELLIPSES)
+    }
+
 }

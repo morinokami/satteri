@@ -147,7 +147,7 @@ fn inline_code_position_preserved() {
     // class="language-*" and inline math uses class="language-math *",
     // so filtering on class absence locks onto inline code specifically.
     let h_id = find_hast_element_where(&hast, "code", |arena, id| {
-        element_prop(arena, id, "class").is_none()
+        element_prop(arena, id, "className").is_none()
     });
     assert_position_matches(&hast, h_id, &mdast, m_id, "inline code");
 }
@@ -235,13 +235,13 @@ fn footnote_reference_and_definition_positions_preserved() {
     // by the distinguishing class rather than relying on source order.
     let ref_m = find_mdast(&mdast, MdastNodeType::FootnoteReference);
     let ref_h = find_hast_element_where(&hast, "sup", |arena, id| {
-        element_prop(arena, id, "class") == Some("footnote-reference")
+        element_prop(arena, id, "className") == Some("footnote-reference")
     });
     assert_position_matches(&hast, ref_h, &mdast, ref_m, "footnote reference");
 
     let def_m = find_mdast(&mdast, MdastNodeType::FootnoteDefinition);
     let def_h = find_hast_element_where(&hast, "div", |arena, id| {
-        element_prop(arena, id, "class") == Some("footnote-definition")
+        element_prop(arena, id, "className") == Some("footnote-definition")
     });
     assert_position_matches(&hast, def_h, &mdast, def_m, "footnote definition");
 }
@@ -267,7 +267,7 @@ fn math_block_position_preserved() {
         arena.get_children(id).first().is_some_and(|&child_id| {
             is_element_with_tag(arena, child_id, "code")
                 && matches!(
-                    element_prop(arena, child_id, "class"),
+                    element_prop(arena, child_id, "className"),
                     Some(c) if c.contains("math-display")
                 )
         })
@@ -284,7 +284,7 @@ fn inline_math_position_preserved() {
     let m_id = find_mdast(&mdast, MdastNodeType::InlineMath);
     let h_id = find_hast_element_where(&hast, "code", |arena, id| {
         matches!(
-            element_prop(arena, id, "class"),
+            element_prop(arena, id, "className"),
             Some(c) if c.contains("math-inline")
         )
     });

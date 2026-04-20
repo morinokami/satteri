@@ -79,14 +79,30 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                     None => break, // Done: popped past root.
                 };
 
-                // Skip TightParagraph (no MDAST node).
-                if matches!(inner.tree[ix].item.body, ItemBody::TightParagraph) {
+                // TightParagraph: close it like a regular paragraph.
+                // MDAST spec requires listItem > paragraph > text even for
+                // tight lists.
+
+                // Inside an image: skip closing non-Image containers
+                // (they were never opened in the MDAST builder).
+                if image_alt_buf.is_some()
+                    && !matches!(inner.tree[ix].item.body, ItemBody::Image(_))
+                {
+                    image_depth = image_depth.saturating_sub(1);
                     inner.tree.next_sibling(ix);
                     continue;
                 }
 
                 let item = inner.tree[ix].item;
-                let end = item.end as u32;
+                let mut end = item.end as u32;
+                if item.body.is_block_level() {
+                    let src = source.as_bytes();
+                    while end > item.start as u32
+                        && matches!(src.get(end as usize - 1), Some(b'\n' | b'\r'))
+                    {
+                        end -= 1;
+                    }
+                }
                 let (end_line, end_col) = cursor.offset_to_line_col(end);
 
                 match &inner.tree[ix].item.body {
@@ -217,11 +233,9 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                 inner.tree.next_sibling(ix);
             }
             Some(cur_ix) => {
-                // Skip TightParagraph: push through to children.
-                if matches!(inner.tree[cur_ix].item.body, ItemBody::TightParagraph) {
-                    inner.tree.push();
-                    continue;
-                }
+                // TightParagraph: emit as a regular paragraph node.
+                // MDAST spec requires listItem > paragraph > text even for
+                // tight lists.
 
                 // Resolve inline markup if needed.
                 if inner.tree[cur_ix].item.body.is_maybe_inline() {
@@ -259,7 +273,8 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                     }
                 }
 
-                // Accumulate image alt text.
+                // Inside an image: accumulate alt text but skip MDAST
+                // node emission. Image is a void node in the MDAST spec.
                 if let Some(buf) = image_alt_buf.as_mut() {
                     match &item.body {
                         ItemBody::Text { .. } => {
@@ -281,14 +296,25 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         }
                         ItemBody::Image(_) => {
                             image_depth += 1;
+                            inner.tree.push();
+                            continue;
                         }
-                        _ => {}
+                        _ => {
+                            if inner.tree[cur_ix].child.is_some() {
+                                image_depth += 1;
+                                inner.tree.push();
+                                continue;
+                            }
+                        }
                     }
+                    // Leaf node: advance past it.
+                    inner.tree.next_sibling(cur_ix);
+                    continue;
                 }
 
                 // Map ItemBody to arena node.
                 match item.body {
-                    ItemBody::Paragraph => {
+                    ItemBody::Paragraph | ItemBody::TightParagraph => {
                         builder.open_node(MdastNodeType::Paragraph as u8);
                         builder.set_position_current(
                             start, end, start_line, start_col, end_line, end_col,
@@ -609,18 +635,68 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                         inner.tree.push();
                     }
 
-                    ItemBody::Text { .. } => {
-                        let sr = StringRef::new(start, end - start);
-                        builder.add_leaf_full(
-                            MdastNodeType::Text as u8,
-                            start,
-                            end,
-                            start_line,
-                            start_col,
-                            end_line,
-                            end_col,
-                            &sr.as_bytes(),
-                        );
+                    ItemBody::Text { backslash_escaped } => {
+                        let text_value: &str = &source[item.start..item.end];
+
+                        // Merge with previous sibling text node when
+                        // adjacent or separated by a gap (backslash escape).
+                        let prev_id = builder.last_sibling_id();
+                        let merged = if let Some(pid) = prev_id {
+                            let prev = builder.arena_ref().get_node(pid);
+                            if prev.node_type == MdastNodeType::Text as u8 {
+                                let prev_data = builder.arena_ref().get_type_data(pid);
+                                if prev_data.len() >= 8 {
+                                    let prev_sr = StringRef::from_bytes(prev_data);
+                                    let prev_text = builder.arena_ref().get_str(prev_sr);
+                                    let combined = [prev_text, text_value].concat();
+                                    let new_sr = builder.alloc_string(&combined);
+                                    let pn = builder.arena_ref().get_node(pid);
+                                    builder.update_leaf_full(
+                                        pid,
+                                        pn.start_offset,
+                                        end,
+                                        pn.start_line,
+                                        pn.start_column,
+                                        end_line,
+                                        end_col,
+                                        &new_sr.as_bytes(),
+                                    );
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        if !merged {
+                            let (sr, pos_start, pos_start_col) = if backslash_escaped && start > 0 {
+                                (
+                                    builder.alloc_string(text_value),
+                                    start - 1,
+                                    start_col.saturating_sub(1),
+                                )
+                            } else {
+                                (StringRef::new(start, end - start), start, start_col)
+                            };
+                            let pos_start_line = if backslash_escaped && start > 0 {
+                                cursor.offset_to_line_col(start - 1).0
+                            } else {
+                                start_line
+                            };
+                            builder.add_leaf_full(
+                                MdastNodeType::Text as u8,
+                                pos_start,
+                                end,
+                                pos_start_line,
+                                pos_start_col,
+                                end_line,
+                                end_col,
+                                &sr.as_bytes(),
+                            );
+                        }
                         inner.tree.next_sibling(cur_ix);
                     }
                     ItemBody::Code(cow_ix) => {
@@ -888,7 +964,7 @@ pub fn parse(source: &str, options: Options) -> (Arena, Vec<(usize, String)>) {
                     }
 
                     // Skip these silently.
-                    ItemBody::TightParagraph | ItemBody::Root => {
+                    ItemBody::Root => {
                         inner.tree.push();
                     }
 

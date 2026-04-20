@@ -12,7 +12,7 @@ use crate::mdast::{
     decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name, decode_reference_data,
     decode_table_alignments, encode_mdx_jsx_element_data, ColumnAlign, MdastNodeType,
 };
-use crate::shared::{PROP_BOOL_TRUE, PROP_SPACE_SEP, PROP_STRING};
+use crate::shared::{PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_SPACE_SEP, PROP_STRING};
 
 /// Convert an MDAST arena directly to a HAST arena.
 pub fn mdast_arena_to_hast_arena(source: &Arena) -> Arena {
@@ -320,7 +320,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
         Some(MdastNodeType::Blockquote) => {
             open_element(builder, "blockquote");
             copy_position(node_id, view, builder);
-            convert_children(node_id, view, builder, ctx);
+            convert_children_with_newlines(node_id, view, builder, ctx);
             builder.close_node();
         }
 
@@ -341,7 +341,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             }
             if has_task_items {
                 class_ref = builder.alloc_string("contains-task-list");
-                prop_specs.push(("class", PROP_SPACE_SEP, class_ref));
+                prop_specs.push(("className", PROP_SPACE_SEP, class_ref));
             }
 
             if prop_specs.is_empty() {
@@ -351,7 +351,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
                 open_element_with_props(builder, tag, &props);
             }
             copy_position(node_id, view, builder);
-            convert_children(node_id, view, builder, ctx);
+            convert_children_with_newlines(node_id, view, builder, ctx);
             builder.close_node();
         }
 
@@ -366,7 +366,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
 
             if is_task {
                 let class_ref = builder.alloc_string("task-list-item");
-                let props = build_props(builder, &[("class", PROP_SPACE_SEP, class_ref)]);
+                let props = build_props(builder, &[("className", PROP_SPACE_SEP, class_ref)]);
                 open_element_with_props(builder, "li", &props);
             } else {
                 open_element(builder, "li");
@@ -391,13 +391,30 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
                         builder,
                         &[
                             ("type", PROP_STRING, type_ref),
+                            ("checked", PROP_BOOL_FALSE, StringRef::empty()),
                             ("disabled", PROP_BOOL_TRUE, StringRef::empty()),
                         ],
                     );
                     add_void_element_with_props(builder, "input", &props);
                 }
+                add_text_node(builder, " ");
             }
-            convert_children(node_id, view, builder, ctx);
+            // Use parent list's spread, not the item's, to decide
+            // whether to wrap content in <p> tags.
+            let parent_id = view.get_node(node_id).parent;
+            let parent_spread = {
+                let pd = view.get_type_data(parent_id);
+                if !pd.is_empty() {
+                    decode_list_data(pd).spread
+                } else {
+                    false
+                }
+            };
+            if parent_spread {
+                convert_children_with_newlines(node_id, view, builder, ctx);
+            } else {
+                convert_children_unwrap_paragraphs(node_id, view, builder, ctx);
+            }
             builder.close_node();
         }
 
@@ -419,13 +436,14 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
                 let lang = view.get_str(code_data.lang);
                 let class_val = format!("language-{}", lang);
                 let class_ref = builder.alloc_string(&class_val);
-                let props = build_props(builder, &[("class", PROP_SPACE_SEP, class_ref)]);
+                let props = build_props(builder, &[("className", PROP_SPACE_SEP, class_ref)]);
                 open_element_with_props(builder, "code", &props)
             } else {
                 open_element(builder, "code")
             };
 
-            // Attach lang/meta to code element's data for easy access by plugins
+            copy_position(node_id, view, builder);
+
             let lang = view.get_str(code_data.lang);
             let meta = view.get_str(code_data.meta);
             if !lang.is_empty() || !meta.is_empty() {
@@ -472,13 +490,15 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             let string_ref = decode_string_ref_data(data);
             open_element(builder, "code");
             copy_position(node_id, view, builder);
-            add_text_node(builder, view.get_str(string_ref));
+            let text_id = add_text_node(builder, view.get_str(string_ref));
+            copy_position_to(text_id, node_id, view, builder);
             builder.close_node();
         }
 
         Some(MdastNodeType::Break) => {
             let id = add_void_element(builder, "br");
             copy_position_to(id, node_id, view, builder);
+            add_text_node(builder, "\n");
         }
 
         Some(MdastNodeType::Link) => {
@@ -543,16 +563,37 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             copy_position(node_id, view, builder);
             let child_ids = view.get_children(node_id);
             if !child_ids.is_empty() {
+                add_text_node(builder, "\n");
                 open_element(builder, "thead");
+                copy_position(child_ids[0], view, builder);
+                add_text_node(builder, "\n");
                 convert_table_row(child_ids[0], view, builder, ctx, true, &alignments);
+                add_text_node(builder, "\n");
                 builder.close_node(); // thead
+                add_text_node(builder, "\n");
 
                 if child_ids.len() > 1 {
                     open_element(builder, "tbody");
+                    // tbody spans from first body row to last body row
+                    let first_body = child_ids[1];
+                    let last_body = *child_ids.last().unwrap();
+                    let fb = view.get_node(first_body);
+                    let lb = view.get_node(last_body);
+                    builder.set_position_current(
+                        fb.start_offset,
+                        lb.end_offset,
+                        fb.start_line,
+                        fb.start_column,
+                        lb.end_line,
+                        lb.end_column,
+                    );
+                    add_text_node(builder, "\n");
                     for &row_id in &child_ids[1..] {
                         convert_table_row(row_id, view, builder, ctx, false, &alignments);
+                        add_text_node(builder, "\n");
                     }
                     builder.close_node(); // tbody
+                    add_text_node(builder, "\n");
                 }
             }
             builder.close_node(); // table
@@ -563,7 +604,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             let math_data = decode_math_data(data);
             let value = view.get_str(math_data.value);
             let class_ref = builder.alloc_string("language-math math-display");
-            let props = build_props(builder, &[("class", PROP_SPACE_SEP, class_ref)]);
+            let props = build_props(builder, &[("className", PROP_SPACE_SEP, class_ref)]);
             open_element(builder, "pre");
             copy_position(node_id, view, builder);
             open_element_with_props(builder, "code", &props);
@@ -577,7 +618,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
             let string_ref = decode_string_ref_data(data);
             let value = view.get_str(string_ref);
             let class_ref = builder.alloc_string("language-math math-inline");
-            let props = build_props(builder, &[("class", PROP_SPACE_SEP, class_ref)]);
+            let props = build_props(builder, &[("className", PROP_SPACE_SEP, class_ref)]);
             open_element_with_props(builder, "code", &props);
             copy_position(node_id, view, builder);
             add_text_node(builder, value);
@@ -667,7 +708,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
                 let href = format!("#{}", identifier);
                 let href_ref = builder.alloc_string(&href);
                 let class_ref = builder.alloc_string("footnote-reference");
-                let sup_props = build_props(builder, &[("class", PROP_SPACE_SEP, class_ref)]);
+                let sup_props = build_props(builder, &[("className", PROP_SPACE_SEP, class_ref)]);
                 open_element_with_props(builder, "sup", &sup_props);
                 copy_position(node_id, view, builder);
                 let a_props = build_props(builder, &[("href", PROP_STRING, href_ref)]);
@@ -696,7 +737,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
                 let div_props = build_props(
                     builder,
                     &[
-                        ("class", PROP_SPACE_SEP, class_ref),
+                        ("className", PROP_SPACE_SEP, class_ref),
                         ("id", PROP_STRING, id_ref),
                     ],
                 );
@@ -704,7 +745,7 @@ fn convert_node(node_id: u32, view: &Arena, builder: &mut ArenaBuilder, ctx: &Co
                 copy_position(node_id, view, builder);
                 let label_class_ref = builder.alloc_string("footnote-definition-label");
                 let label_props =
-                    build_props(builder, &[("class", PROP_SPACE_SEP, label_class_ref)]);
+                    build_props(builder, &[("className", PROP_SPACE_SEP, label_class_ref)]);
                 open_element_with_props(builder, "sup", &label_props);
                 let num_str = number.to_string();
                 add_text_node(builder, &num_str);
@@ -827,6 +868,59 @@ fn convert_children(
     }
 }
 
+/// Convert children with `\n` text nodes between them.
+/// Matches `remark-rehype`'s behavior for block containers.
+fn convert_children_with_newlines(
+    node_id: u32,
+    view: &Arena,
+    builder: &mut ArenaBuilder,
+    ctx: &ConvertCtx<'_, '_>,
+) {
+    let children = view.get_children(node_id);
+    if children.is_empty() {
+        return;
+    }
+    add_text_node(builder, "\n");
+    for &child_id in children {
+        let child_node = view.get_node(child_id);
+        let is_unraveled = MdastNodeType::from_u8(child_node.node_type)
+            == Some(MdastNodeType::Paragraph)
+            && is_mdx_only_paragraph(child_id, view);
+        if is_unraveled {
+            let para_children = view.get_children(child_id);
+            for &para_child_id in para_children {
+                convert_node(para_child_id, view, builder, ctx);
+                add_text_node(builder, "\n");
+            }
+        } else {
+            convert_node(child_id, view, builder, ctx);
+            add_text_node(builder, "\n");
+        }
+    }
+}
+
+/// Convert children, unwrapping paragraphs (emitting their children directly).
+/// Used for tight list items where the MDAST has paragraph wrappers but
+/// HTML output should not have `<p>` tags.
+fn convert_children_unwrap_paragraphs(
+    node_id: u32,
+    view: &Arena,
+    builder: &mut ArenaBuilder,
+    ctx: &ConvertCtx<'_, '_>,
+) {
+    let children = view.get_children(node_id);
+    for &child_id in children {
+        let child = view.get_node(child_id);
+        if MdastNodeType::from_u8(child.node_type) == Some(MdastNodeType::Paragraph) {
+            convert_children(child_id, view, builder, ctx);
+        } else {
+            add_text_node(builder, "\n");
+            convert_node(child_id, view, builder, ctx);
+            add_text_node(builder, "\n");
+        }
+    }
+}
+
 /// Convert children with `\n` text nodes inserted between them.
 /// These are needed by the MDX compilation path (JSX children spacing).
 /// The HTML renderer skips whitespace-only text nodes between block elements.
@@ -872,6 +966,8 @@ fn convert_table_row(
     alignments: &[ColumnAlign],
 ) {
     open_element(builder, "tr");
+    copy_position(row_id, view, builder);
+    add_text_node(builder, "\n");
     let cell_ids = view.get_children(row_id);
     let cell_tag = if is_header { "th" } else { "td" };
     for (col_idx, &cell_id) in cell_ids.iter().enumerate() {
@@ -892,8 +988,10 @@ fn convert_table_row(
         } else {
             open_element(builder, cell_tag);
         }
+        copy_position(cell_id, view, builder);
         convert_children(cell_id, view, builder, ctx);
         builder.close_node();
+        add_text_node(builder, "\n");
     }
     builder.close_node(); // tr
 }
@@ -1005,5 +1103,54 @@ fn extract_text_recursive(node_id: u32, view: &Arena, out: &mut String) {
     }
     for &child_id in view.get_children(node_id) {
         extract_text_recursive(child_id, view, out);
+    }
+}
+
+#[cfg(test)]
+mod hast_convert_tests {
+    use super::*;
+
+    #[test]
+    fn multi_jsx_unraveled() {
+        let source = "<Foo bar={1}/><Bar baz={2}/>\n";
+        let opts = satteri_pulldown_cmark::Options::ENABLE_MDX;
+        let (mdast, _) = satteri_pulldown_cmark::parse(source, opts);
+        let hast = mdast_arena_to_hast_arena(&mdast);
+        let root_children = hast.get_children(0);
+        assert!(
+            root_children.len() >= 2,
+            "Expected at least 2 HAST root children"
+        );
+    }
+
+    #[test]
+    fn jsx_flow_with_full_options() {
+        use satteri_pulldown_cmark::Options;
+        let cases: &[(&str, &[u8])] = &[
+            ("<a></a>\n", &[100]),        // mdxJsxFlowElement
+            ("<Foo/><Bar/>\n", &[100, 100]),
+            ("<Box>{1}</Box>\n", &[100]),
+            ("<Box><Foo/></Box>\n", &[100]),
+            ("<Box>hello</Box>\n", &[1]), // paragraph
+        ];
+        // Match the NAPI binding's default options for MDX
+        let opts = satteri_pulldown_cmark::MDX_OPTIONS
+            | Options::ENABLE_GFM
+            | Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS;
+        for (source, expected_types) in cases {
+            let (arena, _) = satteri_pulldown_cmark::parse(source, opts);
+            let root_children = arena.get_children(0);
+            let types: Vec<u8> = root_children
+                .iter()
+                .map(|&id| arena.get_node(id).node_type)
+                .collect();
+            assert_eq!(
+                &types,
+                expected_types,
+                "source: {:?}, got types: {:?}",
+                source,
+                types
+            );
+        }
     }
 }

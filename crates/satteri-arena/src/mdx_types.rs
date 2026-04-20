@@ -4,7 +4,6 @@
 //! here so mdxjs-rs doesn't depend on the old parser.
 
 use core::fmt;
-use unicode_id_start::{is_id_continue, is_id_start};
 
 /// One place in a source file.
 #[derive(Clone, Eq, PartialEq)]
@@ -221,14 +220,4 @@ pub struct MdxJsxAttribute {
 pub struct MdxJsxExpressionAttribute {
     pub value: String,
     pub stops: Vec<Stop>,
-}
-
-#[must_use]
-pub fn id_start(char: char) -> bool {
-    is_id_start(char) || matches!(char, '$' | '_')
-}
-
-#[must_use]
-pub fn id_cont(char: char, jsx: bool) -> bool {
-    is_id_continue(char) || matches!(char, '\u{200c}' | '\u{200d}') || (jsx && char == '-')
 }

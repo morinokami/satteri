@@ -24,15 +24,29 @@ use crate::{
     },
     oxc::serialize,
     oxc_util_build_jsx::{Options as BuildOptions, oxc_util_build_jsx},
+    oxc_utils::{
+        create_binding_ident, create_ident_expression, create_ident_name, create_num_expression,
+        create_object_expression, create_string_literal,
+    },
 };
-use oxc_allocator::Allocator;
+use oxc_allocator::{Allocator, Box as OxcBox, Vec as OxcVec};
+use oxc_ast::ast::{
+    BindingPattern, BindingProperty, Declaration, Directive, ExportSpecifier, Expression,
+    ImportDeclarationSpecifier, ModuleExportName, ObjectProperty,
+    ObjectPropertyKind, PropertyKey, PropertyKind, ReturnStatement, Statement,
+    VariableDeclaration, VariableDeclarationKind, VariableDeclarator,
+};
 use oxc_estree::{CompactJSSerializer, ESTree};
 use oxc_parser::{ParseOptions, Parser};
-use oxc_span::{SourceType, Span};
+use oxc_span::{Atom, SPAN, SourceType, Span};
+use oxc_syntax::node::NodeId;
 use rustc_hash::FxHashSet;
 use satteri_arena::mdx_types::{self as message, Location};
+use std::cell::Cell;
 
-pub use crate::configuration::{MdxConstructs, MdxParseOptions, OptimizeStaticConfig, Options};
+pub use crate::configuration::{
+    MdxConstructs, MdxParseOptions, OptimizeStaticConfig, Options, OutputFormat,
+};
 pub use crate::mdx_plugin_recma_document::JsxRuntime;
 
 /// Parse a JavaScript expression and return its ESTree-compatible JSON representation.
@@ -157,7 +171,254 @@ pub fn compile_hast_arena(
         &explicit_jsxs,
         &allocator,
     )?;
+    if options.output_format == OutputFormat::FunctionBody {
+        transform_program_to_function_body(&mut program, &allocator);
+    }
     Ok(serialize(&program.program))
+}
+
+fn transform_program_to_function_body<'a>(
+    program: &mut MdxProgram<'a>,
+    allocator: &'a Allocator,
+) {
+    let body = std::mem::replace(&mut program.program.body, OxcVec::new_in(allocator));
+    let mut new_body: Vec<Statement<'a>> = Vec::with_capacity(body.len());
+    // (exported_name, local_name) pairs
+    let mut exports: Vec<(String, String)> = Vec::new();
+
+    program.program.directives = {
+        let mut directives = OxcVec::with_capacity_in(1, allocator);
+        directives.push(Directive {
+            node_id: Cell::new(NodeId::DUMMY),
+            span: SPAN,
+            expression: create_string_literal(allocator, "use strict"),
+            directive: Atom::from(allocator.alloc_str("use strict")),
+        });
+        directives
+    };
+
+    for stmt in body {
+        match stmt {
+            Statement::ImportDeclaration(import_decl) => {
+                let import_decl = import_decl.unbox();
+                if let Some(specifiers) = &import_decl.specifiers
+                    && !specifiers.is_empty()
+                {
+                    new_body.push(import_to_arguments_destructure(allocator, specifiers));
+                }
+            }
+            Statement::ExportDefaultDeclaration(_) => {}
+            Statement::ExportNamedDeclaration(named_export) => {
+                let named_export = named_export.unbox();
+                collect_specifier_exports(&named_export.specifiers, &mut exports);
+                if let Some(decl) = named_export.declaration {
+                    collect_declaration_exports(&decl, &mut exports);
+                    new_body.push(Statement::from(decl));
+                }
+            }
+            other => new_body.push(other),
+        }
+    }
+
+    new_body.push(create_exports_return(allocator, &exports));
+    program.program.body = OxcVec::from_iter_in(new_body, allocator);
+}
+
+fn import_to_arguments_destructure<'a>(
+    alloc: &'a Allocator,
+    specifiers: &[ImportDeclarationSpecifier<'a>],
+) -> Statement<'a> {
+    use oxc_ast::ast::{ComputedMemberExpression, MemberExpression, ObjectPattern};
+
+    let mut properties = OxcVec::with_capacity_in(specifiers.len(), alloc);
+    for spec in specifiers {
+        match spec {
+            ImportDeclarationSpecifier::ImportDefaultSpecifier(s) => {
+                properties.push(BindingProperty {
+                    node_id: Cell::new(NodeId::DUMMY),
+                    span: SPAN,
+                    key: PropertyKey::StaticIdentifier(OxcBox::new_in(
+                        create_ident_name(alloc, "default"),
+                        alloc,
+                    )),
+                    value: BindingPattern::BindingIdentifier(OxcBox::new_in(
+                        create_binding_ident(alloc, s.local.name.as_str()),
+                        alloc,
+                    )),
+                    shorthand: false,
+                    computed: false,
+                });
+            }
+            ImportDeclarationSpecifier::ImportSpecifier(s) => {
+                let imported = module_export_name_str(&s.imported);
+                let local = s.local.name.as_str();
+                properties.push(BindingProperty {
+                    node_id: Cell::new(NodeId::DUMMY),
+                    span: SPAN,
+                    key: PropertyKey::StaticIdentifier(OxcBox::new_in(
+                        create_ident_name(alloc, imported),
+                        alloc,
+                    )),
+                    value: BindingPattern::BindingIdentifier(OxcBox::new_in(
+                        create_binding_ident(alloc, local),
+                        alloc,
+                    )),
+                    shorthand: imported == local,
+                    computed: false,
+                });
+            }
+            ImportDeclarationSpecifier::ImportNamespaceSpecifier(_) => {}
+        }
+    }
+
+    let arguments_0 = Expression::from(MemberExpression::ComputedMemberExpression(
+        OxcBox::new_in(
+            ComputedMemberExpression {
+                node_id: Cell::new(NodeId::DUMMY),
+                object: create_ident_expression(alloc, "arguments"),
+                expression: create_num_expression(alloc, 0.0),
+                optional: false,
+                span: SPAN,
+            },
+            alloc,
+        ),
+    ));
+
+    let mut decls = OxcVec::with_capacity_in(1, alloc);
+    decls.push(VariableDeclarator {
+        node_id: Cell::new(NodeId::DUMMY),
+        span: SPAN,
+        kind: VariableDeclarationKind::Const,
+        id: BindingPattern::ObjectPattern(OxcBox::new_in(
+            ObjectPattern {
+                node_id: Cell::new(NodeId::DUMMY),
+                span: SPAN,
+                properties,
+                rest: None,
+            },
+            alloc,
+        )),
+        type_annotation: None,
+        init: Some(arguments_0),
+        definite: false,
+    });
+
+    Statement::from(Declaration::VariableDeclaration(OxcBox::new_in(
+        VariableDeclaration {
+            node_id: Cell::new(NodeId::DUMMY),
+            span: SPAN,
+            kind: VariableDeclarationKind::Const,
+            declarations: decls,
+            declare: false,
+        },
+        alloc,
+    )))
+}
+
+fn collect_specifier_exports(specifiers: &[ExportSpecifier<'_>], exports: &mut Vec<(String, String)>) {
+    for spec in specifiers {
+        let exported = module_export_name_str(&spec.exported);
+        if exported == "default" {
+            continue;
+        }
+        let local = module_export_name_str_local(&spec.local);
+        exports.push((exported.to_string(), local.to_string()));
+    }
+}
+
+fn collect_declaration_exports(decl: &Declaration<'_>, exports: &mut Vec<(String, String)>) {
+    match decl {
+        Declaration::VariableDeclaration(var_decl) => {
+            for declarator in &var_decl.declarations {
+                if let BindingPattern::BindingIdentifier(ident) = &declarator.id {
+                    let name = ident.name.to_string();
+                    exports.push((name.clone(), name));
+                }
+            }
+        }
+        Declaration::FunctionDeclaration(func) => {
+            if let Some(id) = &func.id {
+                let name = id.name.to_string();
+                exports.push((name.clone(), name));
+            }
+        }
+        Declaration::ClassDeclaration(cls) => {
+            if let Some(id) = &cls.id {
+                let name = id.name.to_string();
+                exports.push((name.clone(), name));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn create_exports_return<'a>(
+    alloc: &'a Allocator,
+    exports: &[(String, String)],
+) -> Statement<'a> {
+    let mut properties = OxcVec::with_capacity_in(exports.len() + 1, alloc);
+
+    for (exported, local) in exports {
+        let shorthand = exported == local;
+        properties.push(ObjectPropertyKind::ObjectProperty(OxcBox::new_in(
+            ObjectProperty {
+                node_id: Cell::new(NodeId::DUMMY),
+                span: SPAN,
+                kind: PropertyKind::Init,
+                key: PropertyKey::StaticIdentifier(OxcBox::new_in(
+                    create_ident_name(alloc, exported),
+                    alloc,
+                )),
+                value: create_ident_expression(alloc, local),
+                shorthand,
+                method: false,
+                computed: false,
+            },
+            alloc,
+        )));
+    }
+
+    properties.push(ObjectPropertyKind::ObjectProperty(OxcBox::new_in(
+        ObjectProperty {
+            node_id: Cell::new(NodeId::DUMMY),
+            span: SPAN,
+            kind: PropertyKind::Init,
+            key: PropertyKey::StaticIdentifier(OxcBox::new_in(
+                create_ident_name(alloc, "default"),
+                alloc,
+            )),
+            value: create_ident_expression(alloc, "MDXContent"),
+            shorthand: false,
+            method: false,
+            computed: false,
+        },
+        alloc,
+    )));
+
+    Statement::ReturnStatement(OxcBox::new_in(
+        ReturnStatement {
+            node_id: Cell::new(NodeId::DUMMY),
+            span: SPAN,
+            argument: Some(create_object_expression(alloc, properties)),
+        },
+        alloc,
+    ))
+}
+
+fn module_export_name_str<'a>(name: &'a ModuleExportName<'_>) -> &'a str {
+    match name {
+        ModuleExportName::IdentifierName(ident) => ident.name.as_str(),
+        ModuleExportName::IdentifierReference(ident) => ident.name.as_str(),
+        ModuleExportName::StringLiteral(lit) => lit.value.as_str(),
+    }
+}
+
+fn module_export_name_str_local<'a>(name: &'a ModuleExportName<'_>) -> &'a str {
+    match name {
+        ModuleExportName::IdentifierReference(ident) => ident.name.as_str(),
+        ModuleExportName::IdentifierName(ident) => ident.name.as_str(),
+        ModuleExportName::StringLiteral(lit) => lit.value.as_str(),
+    }
 }
 
 /// Simplify plain MDX JSX elements into regular HAST elements in-place.

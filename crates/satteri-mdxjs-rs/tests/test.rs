@@ -1,6 +1,6 @@
 extern crate satteri_mdxjs;
 use pretty_assertions::assert_eq;
-use satteri_mdxjs::{JsxRuntime, OptimizeStaticConfig, Options, compile};
+use satteri_mdxjs::{JsxRuntime, OptimizeStaticConfig, Options, OutputFormat, compile};
 
 const MDX_OPTS: satteri_pulldown_cmark::Options = satteri_pulldown_cmark::MDX_OPTIONS;
 
@@ -752,6 +752,64 @@ fn jsx_inside_new_expression() -> Result<(), satteri_arena::mdx_types::Message> 
     assert!(
         result.contains("new Wrapper(_jsx(\"span\", { children: \"y\" }))"),
         "JSX inside NewExpression must be transformed: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn function_body_simple() -> Result<(), satteri_arena::mdx_types::Message> {
+    let result = compile(
+        "# Hi!",
+        &Options {
+            output_format: OutputFormat::FunctionBody,
+            ..Default::default()
+        },
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.starts_with("\"use strict\""),
+        "should start with use strict: {result}"
+    );
+    assert!(
+        !result.contains("import "),
+        "should not contain import statements: {result}"
+    );
+    assert!(
+        !result.contains("export default"),
+        "should not contain export default: {result}"
+    );
+    assert!(
+        result.contains("const { jsx: _jsx } = arguments[0]"),
+        "should destructure from arguments[0]: {result}"
+    );
+    assert!(
+        result.contains("default: MDXContent"),
+        "should return default MDXContent: {result}"
+    );
+    Ok(())
+}
+
+#[test]
+fn function_body_with_exports() -> Result<(), satteri_arena::mdx_types::Message> {
+    let result = compile(
+        "export const name = \"world\";\n\n# Hello {name}",
+        &Options {
+            output_format: OutputFormat::FunctionBody,
+            ..Default::default()
+        },
+        MDX_OPTS,
+    )?;
+    assert!(
+        result.contains("const name = \"world\""),
+        "should unwrap export declaration: {result}"
+    );
+    assert!(
+        !result.contains("export const"),
+        "should not contain export keyword: {result}"
+    );
+    assert!(
+        result.contains("name") && result.contains("default: MDXContent"),
+        "should include named export in return: {result}"
     );
     Ok(())
 }

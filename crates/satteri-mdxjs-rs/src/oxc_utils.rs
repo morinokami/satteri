@@ -1,7 +1,8 @@
 //! Lots of helpers for dealing with OXC, particularly from unist, and for
 //! building its ES AST.
 
-use satteri_arena::mdx_types::{Location, Point, Position, id_cont, id_start};
+use satteri_arena::mdx_types::{Location, Point, Position};
+use unicode_id_start::{is_id_continue, is_id_start};
 
 use std::cell::Cell;
 
@@ -493,12 +494,14 @@ pub fn is_literal_name(name: &str) -> bool {
 
 /// Check if a name is a valid identifier name.
 pub fn is_identifier_name(name: &str) -> bool {
+    // `$` and `_` are ECMAScript IdentifierStart chars not in Unicode ID_Start.
     for (index, char) in name.chars().enumerate() {
-        if if index == 0 {
-            !id_start(char)
+        let valid = if index == 0 {
+            is_id_start(char) || char == '$' || char == '_'
         } else {
-            !id_cont(char, false)
-        } {
+            is_id_continue(char) || char == '$'
+        };
+        if !valid {
             return false;
         }
     }

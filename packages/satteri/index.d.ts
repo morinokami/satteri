@@ -69,8 +69,10 @@ export interface JsFeatures {
   subscript?: boolean
   /** Obsidian-style wikilinks (`[[link]]`). Default: false. */
   wikilinks?: boolean
-  /** Smart punctuation (ligatures, smart quotes). Default: false. */
+  /** Smart punctuation: all categories on. Default: false. */
   smartPunctuation?: boolean
+  /** Granular smart-punctuation control (overrides `smart_punctuation`). */
+  smartPunctuationOptions?: JsSmartPunctuationOptions
   /** Definition lists. Default: false. */
   definitionList?: boolean
 }
@@ -104,6 +106,8 @@ export interface JsMdxOptions {
   pragmaFrag?: string
   /** Where to import the pragma from in classic runtime (default: "react"). */
   pragmaImportSource?: string
+  /** Output format: "program" (default) or "function-body". */
+  outputFormat?: string
 }
 
 /** Static optimization config passed from JavaScript. */
@@ -116,6 +120,16 @@ export interface JsOptimizeStaticConfig {
   wrapPropValue?: boolean
   /** Element tag names to exclude from collapsing. */
   ignoreElements?: Array<string>
+}
+
+/** Granular smart-punctuation toggles. */
+export interface JsSmartPunctuationOptions {
+  /** Replace straight quotes with curly/smart quotes. Default: true. */
+  quotes?: boolean
+  /** Replace `--`/`---` with en-dash/em-dash. Default: true. */
+  dashes?: boolean
+  /** Replace `...` with ellipsis (`…`). Default: true. */
+  ellipses?: boolean
 }
 
 /** A subscription passed from JS. */

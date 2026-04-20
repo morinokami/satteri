@@ -31,8 +31,7 @@ import type { MdastNode, HastNode } from "./types.js";
 
 function featuresToNative(features: Features | undefined) {
   if (!features) return undefined;
-  // Build object with only defined keys to satisfy exactOptionalPropertyTypes
-  const result: Record<string, boolean> = {};
+  const result: Record<string, unknown> = {};
   if (features.gfm !== undefined) result.gfm = features.gfm;
   if (features.frontmatter !== undefined) result.frontmatter = features.frontmatter;
   if (features.math !== undefined) result.math = features.math;
@@ -42,7 +41,13 @@ function featuresToNative(features: Features | undefined) {
   if (features.superscript !== undefined) result.superscript = features.superscript;
   if (features.subscript !== undefined) result.subscript = features.subscript;
   if (features.wikilinks !== undefined) result.wikilinks = features.wikilinks;
-  if (features.smartPunctuation !== undefined) result.smartPunctuation = features.smartPunctuation;
+  if (features.smartPunctuation !== undefined) {
+    if (typeof features.smartPunctuation === "object") {
+      result.smartPunctuationOptions = features.smartPunctuation;
+    } else {
+      result.smartPunctuation = features.smartPunctuation;
+    }
+  }
   if (features.definitionList !== undefined) result.definitionList = features.definitionList;
   return result;
 }
@@ -141,6 +146,7 @@ function mdxOptionsToNative(opts: {
   pragma?: string;
   pragmaFrag?: string;
   pragmaImportSource?: string;
+  outputFormat?: "program" | "function-body";
 }) {
   const hasAny =
     opts.optimizeStatic ||
@@ -151,7 +157,8 @@ function mdxOptionsToNative(opts: {
     opts.providerImportSource !== undefined ||
     opts.pragma !== undefined ||
     opts.pragmaFrag !== undefined ||
-    opts.pragmaImportSource !== undefined;
+    opts.pragmaImportSource !== undefined ||
+    opts.outputFormat !== undefined;
   if (!hasAny) return undefined;
   const result: Record<string, any> = {};
   if (opts.optimizeStatic) result.optimizeStatic = opts.optimizeStatic;
@@ -164,6 +171,7 @@ function mdxOptionsToNative(opts: {
   if (opts.pragma !== undefined) result.pragma = opts.pragma;
   if (opts.pragmaFrag !== undefined) result.pragmaFrag = opts.pragmaFrag;
   if (opts.pragmaImportSource !== undefined) result.pragmaImportSource = opts.pragmaImportSource;
+  if (opts.outputFormat !== undefined) result.outputFormat = opts.outputFormat;
   return result;
 }
 
@@ -173,6 +181,16 @@ export interface OptimizeStaticConfig {
   prop: string;
   wrapPropValue?: boolean;
   ignoreElements?: string[];
+}
+
+/** Granular smart-punctuation toggles. Omitted fields default to true. */
+export interface SmartPunctuationOptions {
+  /** Replace straight quotes with curly/smart quotes. Default: true. */
+  quotes?: boolean;
+  /** Replace `--`/`---` with en-dash/em-dash. Default: true. */
+  dashes?: boolean;
+  /** Replace `...` with ellipsis (`…`). Default: true. */
+  ellipses?: boolean;
 }
 
 /** Parser feature toggles. All default to their documented value when omitted. */
@@ -193,8 +211,15 @@ export interface Features {
   subscript?: boolean;
   /** Obsidian-style wikilinks (`[[link]]`). Default: false. */
   wikilinks?: boolean;
-  /** Smart punctuation à la SmartyPants. Default: false. */
-  smartPunctuation?: boolean;
+  /**
+   * Smart punctuation à la SmartyPants. Default: false.
+   *
+   * Pass `true` to enable all categories, or an options object for granular control:
+   * ```ts
+   * smartPunctuation: { dashes: false } // quotes + ellipses only
+   * ```
+   */
+  smartPunctuation?: boolean | SmartPunctuationOptions;
   /** Definition lists. Default: false. */
   definitionList?: boolean;
 }
@@ -224,6 +249,15 @@ export interface MdxCompileOptions extends CompileOptions {
   pragmaFrag?: string;
   /** Where to import the pragma from in classic runtime (default: "react"). */
   pragmaImportSource?: string;
+  /**
+   * Output format: "program" (default) or "function-body".
+   *
+   * - `"program"`: ES module with `import`/`export` statements.
+   * - `"function-body"`: Function body that reads runtime from `arguments[0]`
+   *   and returns `{ default: MDXContent, ...exports }`. Suitable for
+   *   `new Function()` or `evaluate()`.
+   */
+  outputFormat?: "program" | "function-body";
 }
 
 export function markdownToHtml(
@@ -306,6 +340,45 @@ export function mdxToJs(source: string, options: MdxCompileOptions = {}): string
     return handleResult.then(finish);
   }
   return finish(handleResult);
+}
+
+export interface EvaluateOptions extends Omit<MdxCompileOptions, "jsx" | "outputFormat"> {
+  Fragment: unknown;
+  jsx: (type: unknown, props: unknown, key?: unknown) => unknown;
+  jsxs: (type: unknown, props: unknown, key?: unknown) => unknown;
+  jsxDEV?: (
+    type: unknown,
+    props: unknown,
+    key: unknown,
+    isStaticChildren: boolean,
+    source: unknown,
+    self: unknown,
+  ) => unknown;
+  useMDXComponents?: () => Record<string, unknown>;
+}
+
+/**
+ * Compile and evaluate MDX in one step.
+ *
+ * Returns the module's exports, including `default` (the MDX component).
+ * Returns a Promise when async plugins are used, otherwise returns synchronously.
+ *
+ * ```ts
+ * import * as runtime from "react/jsx-runtime";
+ * const { default: Content } = evaluate("# Hello", { ...runtime });
+ * ```
+ */
+export function evaluate(
+  source: string,
+  options: EvaluateOptions,
+): Record<string, unknown> | Promise<Record<string, unknown>> {
+  const { Fragment, jsx, jsxs, jsxDEV, useMDXComponents, ...compileOpts } = options;
+  const runtime = { Fragment, jsx, jsxs, jsxDEV, useMDXComponents };
+  const code = mdxToJs(source, { ...compileOpts, outputFormat: "function-body" });
+  if (code instanceof Promise) {
+    return code.then((resolved) => new Function(resolved)(runtime));
+  }
+  return new Function(code)(runtime);
 }
 
 // Pipeline: parse → mdast plugins → hast conversion → hast plugins

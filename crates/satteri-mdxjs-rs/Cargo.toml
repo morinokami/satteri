@@ -11,6 +11,7 @@ oxc_estree = { workspace = true, features = ["serialize"] }
 oxc_parser = { workspace = true }
 oxc_span = { workspace = true }
 oxc_syntax = { workspace = true }
+unicode-id-start = "1"
 
 [dev-dependencies]
 pretty_assertions = "1"

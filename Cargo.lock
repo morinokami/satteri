@@ -1074,7 +1074,6 @@ name = "satteri-arena"
 version = "0.1.2"
 dependencies = [
  "rustc-hash",
- "unicode-id-start",
 ]
 
 [[package]]
@@ -1118,6 +1117,7 @@ dependencies = [
  "satteri-ast",
  "satteri-pulldown-cmark",
  "serde",
+ "unicode-id-start",
 ]
 
 [[package]]
@@ -1160,6 +1160,7 @@ dependencies = [
  "satteri-ast",
  "serde",
  "unicase",
+ "unicode-id-start",
 ]
 
 [[package]]

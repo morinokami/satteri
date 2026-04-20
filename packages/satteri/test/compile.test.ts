@@ -953,3 +953,83 @@ describe("mdxToHast", () => {
     expect(jsx.name).toBe("MyComponent");
   });
 });
+
+describe("smartPunctuation options", () => {
+  const input = `"Hello," she said -- it was... unexpected.`;
+
+  test("boolean true enables all smart punctuation", () => {
+    const html = markdownToHtml(input, {
+      features: { smartPunctuation: true },
+    }) as string;
+    expect(html).toContain("\u201c");
+    expect(html).toContain("\u201d");
+    expect(html).toContain("\u2013");
+    expect(html).toContain("\u2026");
+    expect(html).not.toContain("--");
+    expect(html).not.toContain("...");
+  });
+
+  test("boolean false disables all smart punctuation", () => {
+    const html = markdownToHtml(input, {
+      features: { smartPunctuation: false },
+    }) as string;
+    expect(html).toContain('"');
+    expect(html).toContain("--");
+    expect(html).toContain("...");
+  });
+
+  test("quotes only", () => {
+    const html = markdownToHtml(input, {
+      features: { smartPunctuation: { quotes: true, dashes: false, ellipses: false } },
+    }) as string;
+    expect(html).toContain("\u201c");
+    expect(html).toContain("--");
+    expect(html).toContain("...");
+  });
+
+  test("dashes only", () => {
+    const html = markdownToHtml(input, {
+      features: { smartPunctuation: { quotes: false, dashes: true, ellipses: false } },
+    }) as string;
+    expect(html).toContain('"');
+    expect(html).toContain("\u2013");
+    expect(html).toContain("...");
+  });
+
+  test("ellipses only", () => {
+    const html = markdownToHtml(input, {
+      features: { smartPunctuation: { quotes: false, dashes: false, ellipses: true } },
+    }) as string;
+    expect(html).toContain('"');
+    expect(html).toContain("--");
+    expect(html).toContain("\u2026");
+  });
+
+  test("omitted fields default to true", () => {
+    const html = markdownToHtml(input, {
+      features: { smartPunctuation: { dashes: false } },
+    }) as string;
+    expect(html).toContain("\u201c");
+    expect(html).toContain("--");
+    expect(html).toContain("\u2026");
+  });
+
+  test("empty object enables all", () => {
+    const all = markdownToHtml(input, {
+      features: { smartPunctuation: true },
+    }) as string;
+    const empty = markdownToHtml(input, {
+      features: { smartPunctuation: {} },
+    }) as string;
+    expect(empty).toBe(all);
+  });
+
+  test("granular options work with mdxToJs", () => {
+    const js = mdxToJs(input, {
+      features: { smartPunctuation: { dashes: false } },
+    }) as string;
+    expect(js).toContain("\u201c");
+    expect(js).toContain("--");
+    expect(js).toContain("\u2026");
+  });
+});

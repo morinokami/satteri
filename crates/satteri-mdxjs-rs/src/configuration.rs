@@ -310,6 +310,23 @@ pub struct Options {
     /// instead of nested `_jsx()` calls, reducing JS output size and runtime
     /// overhead. See [`OptimizeStaticConfig`] for configuration.
     pub optimize_static: Option<OptimizeStaticConfig>,
+
+    /// Output format (default: `OutputFormat::Program`).
+    ///
+    /// - `Program`: ES module with `import`/`export` statements.
+    /// - `FunctionBody`: Function body that reads runtime from `arguments[0]`
+    ///   and returns `{ default: MDXContent, ...exports }`.
+    pub output_format: OutputFormat,
+}
+
+/// Output format for MDX compilation.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serializable", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serializable", serde(rename_all = "camelCase"))]
+pub enum OutputFormat {
+    #[default]
+    Program,
+    FunctionBody,
 }
 
 impl Default for Options {
@@ -328,6 +345,7 @@ impl Default for Options {
             pragma_import_source: None,
             filepath: None,
             optimize_static: None,
+            output_format: OutputFormat::default(),
         }
     }
 }

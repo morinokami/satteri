@@ -7,7 +7,75 @@ use oxc_span::SourceType;
 use crate::{
     firstpass::FirstPass,
     parse::{Item, ItemBody},
+    strings::CowStr,
 };
+
+fn strip_attr_continuation_indent(s: &str) -> alloc::borrow::Cow<'_, str> {
+    if !s.contains('\n') && !s.contains('\r') {
+        return alloc::borrow::Cow::Borrowed(s);
+    }
+    let mut result = alloc::string::String::with_capacity(s.len());
+    let mut at_line_start = false;
+    for c in s.chars() {
+        if c == '\n' || c == '\r' {
+            result.push(c);
+            at_line_start = true;
+        } else if at_line_start && (c == ' ' || c == '\t') {
+            continue;
+        } else {
+            at_line_start = false;
+            result.push(c);
+        }
+    }
+    alloc::borrow::Cow::Owned(result)
+}
+
+fn is_mdx_unicode_whitespace(s: &[u8], ix: usize) -> bool {
+    if s[ix].is_ascii_whitespace() {
+        return true;
+    }
+    let rest = &s[ix..];
+    let Ok(text) = core::str::from_utf8(rest) else {
+        return false;
+    };
+    let c = text.chars().next().unwrap();
+    // Unicode Zs category, BOM (U+FEFF)
+    matches!(
+        c,
+        '\u{00A0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200A}' | '\u{202F}' | '\u{205F}' | '\u{3000}' | '\u{FEFF}'
+    )
+}
+
+fn char_len_utf8(b: u8) -> usize {
+    match b {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xFF => 4,
+        _ => 1,
+    }
+}
+
+fn decode_utf8_char(s: &[u8], ix: usize) -> Option<char> {
+    core::str::from_utf8(&s[ix..]).ok()?.chars().next()
+}
+
+fn is_jsx_name_start(s: &[u8], ix: usize) -> bool {
+    let b = s[ix];
+    if b < 0x80 {
+        return b.is_ascii_alphabetic() || b == b'_' || b == b'$';
+    }
+    decode_utf8_char(s, ix).is_some_and(unicode_id_start::is_id_start)
+}
+
+fn is_jsx_name_continue(s: &[u8], ix: usize) -> bool {
+    let b = s[ix];
+    if b < 0x80 {
+        return b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'$');
+    }
+    decode_utf8_char(s, ix).is_some_and(unicode_id_start::is_id_continue)
+}
 
 /// Result of trying to parse an ESM block with oxc.
 pub(crate) enum EsmParseResult {
@@ -146,18 +214,49 @@ fn is_blank_line_next(bytes: &[u8], ix: usize) -> bool {
     k >= bytes.len() || bytes[k] == b'\n' || bytes[k] == b'\r'
 }
 
+/// Checks whether a continuation line after a newline has a valid container
+/// prefix. Returns the number of prefix bytes to skip, or `None` to reject
+/// the line as a lazy continuation.
+pub(crate) type ContainerLineCheck<'a> = &'a dyn Fn(&[u8]) -> Option<usize>;
+
+/// After advancing past a newline, check the container prefix on the new line.
+/// Returns `Some(())` if OK (and advances `ix`), or `None` to reject.
+fn check_container_after_newline(
+    bytes: &[u8],
+    ix: &mut usize,
+    container_check: &Option<ContainerLineCheck<'_>>,
+) -> Option<()> {
+    if let Some(check) = container_check {
+        if *ix < bytes.len() {
+            if let Some(skip) = check(&bytes[*ix..]) {
+                *ix += skip;
+            } else {
+                return None;
+            }
+        }
+    }
+    Some(())
+}
+
+fn scan_mdx_expression_end(bytes: &[u8], inline: bool) -> Option<usize> {
+    scan_mdx_expression_end_inner(bytes, inline, None)
+}
+
 /// Scan an MDX expression `{...}`, finding the matching closing `}`.
 ///
 /// Uses a lightweight JS lexer that properly handles strings, comments,
-/// template literals, and regex literals. MDX expressions are rarely complex, so this should cover the vast majority of cases without needing a parser. I kinda wish oxc's exposed his lexer, though.
+/// template literals, and regex literals.
 ///
-/// When `inline` is true, blank lines abort the scan — inline (text)
-/// expressions must stay within a single paragraph, so the parser can't let
-/// an unclosed `{` silently consume later blocks. Flow (block) expressions
-/// are allowed to span blank lines.
+/// When `inline` is true, blank lines abort the scan.
 ///
-/// Returns the byte offset past the closing `}`, or `None` if unclosed.
-fn scan_mdx_expression_end(bytes: &[u8], inline: bool) -> Option<usize> {
+/// When `container_check` is provided, each continuation line is validated
+/// through the closure. If it returns `None`, the line is rejected as a lazy
+/// continuation. Otherwise the returned number of prefix bytes are skipped.
+fn scan_mdx_expression_end_inner(
+    bytes: &[u8],
+    inline: bool,
+    container_check: Option<ContainerLineCheck<'_>>,
+) -> Option<usize> {
     if bytes.is_empty() || bytes[0] != b'{' {
         return None;
     }
@@ -167,11 +266,22 @@ fn scan_mdx_expression_end(bytes: &[u8], inline: bool) -> Option<usize> {
 
     while ix < bytes.len() && depth > 0 {
         match bytes[ix] {
-            b'\n' | b'\r' => {
+            b'\n' => {
                 if inline && is_blank_line_next(bytes, ix) {
                     return None;
                 }
                 ix += 1;
+                check_container_after_newline(bytes, &mut ix, &container_check)?;
+            }
+            b'\r' => {
+                if inline && is_blank_line_next(bytes, ix) {
+                    return None;
+                }
+                ix += 1;
+                if ix < bytes.len() && bytes[ix] == b'\n' {
+                    ix += 1;
+                }
+                check_container_after_newline(bytes, &mut ix, &container_check)?;
             }
             b'{' => {
                 depth += 1;
@@ -305,6 +415,13 @@ fn scan_to_line_end(bytes: &[u8], start: usize) -> Option<usize> {
 /// Scan a JSX tag from `<` to `>` or `/>`, returning the byte offset
 /// immediately after the closing `>`. Does NOT scan to EOL.
 fn scan_mdx_jsx_tag_end(bytes: &[u8]) -> Option<usize> {
+    scan_mdx_jsx_tag_end_inner(bytes, None)
+}
+
+fn scan_mdx_jsx_tag_end_inner(
+    bytes: &[u8],
+    container_check: Option<ContainerLineCheck<'_>>,
+) -> Option<usize> {
     let mut ix = 1; // skip `<`
 
     // Skip `/` for closing tags
@@ -317,40 +434,32 @@ fn scan_mdx_jsx_tag_end(bytes: &[u8]) -> Option<usize> {
         return Some(ix + 1);
     }
 
-    // Validate tag name: must start with letter, `_`, or `$`
-    if ix >= bytes.len() {
+    // Validate tag name: must start with a valid identifier start character
+    if ix >= bytes.len() || !is_jsx_name_start(bytes, ix) {
         return None;
     }
-    let first = bytes[ix];
-    if !first.is_ascii_alphabetic() && first != b'_' && first != b'$' && first < 0x80 {
-        return None;
-    }
-    ix += 1;
+    ix += char_len_utf8(bytes[ix]);
 
     // Scan tag name body
     while ix < bytes.len() {
-        match bytes[ix] {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'$' => ix += 1,
-            b':' => {
-                ix += 1;
-                if ix >= bytes.len() {
-                    return None;
-                }
-                let ch = bytes[ix];
-                if !ch.is_ascii_alphabetic() && ch != b'_' && ch != b'$' && ch < 0x80 {
-                    return None;
-                }
-                ix += 1;
+        if bytes[ix] == b':' {
+            ix += 1;
+            if ix >= bytes.len() || !is_jsx_name_start(bytes, ix) {
+                return None;
             }
-            0x80.. => ix += 1,
-            _ => break,
+            ix += char_len_utf8(bytes[ix]);
+        } else if is_jsx_name_continue(bytes, ix) {
+            ix += char_len_utf8(bytes[ix]);
+        } else {
+            break;
         }
     }
 
     // After tag name: must be whitespace, `>`, `/`, or `{`
     if ix < bytes.len() {
         match bytes[ix] {
-            b'>' | b'/' | b' ' | b'\t' | b'\n' | b'\r' | b'{' => {}
+            b'>' | b'/' | b'{' => {}
+            _ if is_mdx_unicode_whitespace(bytes, ix) => {}
             _ => return None,
         }
     }
@@ -396,6 +505,7 @@ fn scan_mdx_jsx_tag_end(bytes: &[u8]) -> Option<usize> {
                 if ix < bytes.len() && bytes[ix - 1] == b'\r' && bytes[ix] == b'\n' {
                     ix += 1;
                 }
+                check_container_after_newline(bytes, &mut ix, &container_check)?;
             }
             _ => ix += 1,
         }
@@ -448,7 +558,10 @@ pub(crate) fn scan_mdx_esm(bytes: &[u8]) -> Option<usize> {
 /// inline JSX inside a paragraph instead.
 ///
 /// Returns byte offset past the element (including trailing newline) if matched.
-pub(crate) fn scan_mdx_jsx_block(bytes: &[u8]) -> Option<usize> {
+pub(crate) fn scan_mdx_jsx_block(
+    bytes: &[u8],
+    container_check: Option<ContainerLineCheck<'_>>,
+) -> Option<usize> {
     if bytes.len() < 2 || bytes[0] != b'<' {
         return None;
     }
@@ -470,56 +583,34 @@ pub(crate) fn scan_mdx_jsx_block(bytes: &[u8]) -> Option<usize> {
         };
     }
 
-    // Tag name must start with an ASCII letter or `_`
-    let first = bytes[name_start];
-    if !first.is_ascii_alphabetic() && first != b'_' && first != b'$' && first < 0x80 {
+    if !is_jsx_name_start(bytes, name_start) {
         return None;
     }
 
-    // Find the end of the first tag, then allow more tags or expressions
-    // on the same line (e.g., `<a></a>`, `<a/>{1}`, `{1}<a/>`).
-    let mut pos = scan_mdx_jsx_tag_end(bytes)?;
+    let mut pos = scan_mdx_jsx_tag_end_inner(bytes, container_check)?;
 
-    // When the first tag is opening (not self-closing, not closing), anything
-    // between it and its matching closer is element body. Accept more JSX
-    // tags (which will be balanced in a later pass), but reject inline
-    // `{expression}` and bare text — those are children that would be lost
-    // if we claimed this line as a single flow element. Letting the line
-    // fall through to paragraph parsing yields an `MdxJsxTextElement` with
-    // the expression/text preserved as a child.
-    let first_is_self_closing = pos >= 2 && bytes[pos - 2] == b'/' && bytes[pos - 1] == b'>';
-    let first_is_opening = !is_closing && !first_is_self_closing;
-
-    // Consume any subsequent tags or expressions on the same line.
+    // Consume any subsequent JSX tags or expressions on the same line.
+    // Bare text rejects flow — the line falls through to paragraph parsing
+    // where the JSX becomes inline MdxJsxTextElement nodes.
     loop {
-        // Skip whitespace
         while pos < bytes.len() && (bytes[pos] == b' ' || bytes[pos] == b'\t') {
             pos += 1;
         }
         if pos >= bytes.len() || bytes[pos] == b'\n' || bytes[pos] == b'\r' {
-            break; // EOL, valid flow
+            break;
         }
-        // Try another JSX tag
         if bytes[pos] == b'<' {
-            if let Some(end) = scan_mdx_jsx_tag_end(&bytes[pos..]) {
+            if let Some(end) = scan_mdx_jsx_tag_end_inner(&bytes[pos..], container_check) {
                 pos += end;
                 continue;
             }
         }
-        // Try an expression. When the first tag was opening (e.g. `<Foo>{x}</Foo>`),
-        // the `{x}` is element body — refuse to claim the line as flow so it falls
-        // through to paragraph parsing, where it becomes an `MdxJsxTextElement`
-        // with the expression preserved as a child.
         if bytes[pos] == b'{' {
-            if first_is_opening {
-                return None;
-            }
-            if let Some((_, _, len)) = scan_mdx_inline_expression(&bytes[pos..]) {
+            if let Some(len) = scan_mdx_expression_end(&bytes[pos..], true) {
                 pos += len;
                 continue;
             }
         }
-        // Something else follows, not a flow element
         return None;
     }
 
@@ -528,8 +619,11 @@ pub(crate) fn scan_mdx_jsx_block(bytes: &[u8]) -> Option<usize> {
 
 /// Scan for an MDX expression block: `{...}` using lexer-based boundary detection.
 /// Returns byte offset past the end (including trailing newline).
-pub(crate) fn scan_mdx_expression_block(bytes: &[u8]) -> Option<usize> {
-    let mut ix = scan_mdx_expression_end(bytes, false)?;
+pub(crate) fn scan_mdx_expression_block(
+    bytes: &[u8],
+    container_check: Option<ContainerLineCheck<'_>>,
+) -> Option<usize> {
+    let mut ix = scan_mdx_expression_end_inner(bytes, false, container_check)?;
 
     // Block-level expression: only whitespace may follow on the line.
     if !is_only_whitespace_to_eol(&bytes[ix..]) {
@@ -555,9 +649,24 @@ pub(crate) fn scan_mdx_inline_expression(bytes: &[u8]) -> Option<(usize, usize, 
     Some((1, total - 1, total))
 }
 
+pub(crate) fn scan_mdx_inline_expression_in_container(
+    bytes: &[u8],
+    container_check: ContainerLineCheck<'_>,
+) -> Option<(usize, usize, usize)> {
+    let total = scan_mdx_expression_end_inner(bytes, true, Some(container_check))?;
+    Some((1, total - 1, total))
+}
+
 /// Scan an inline JSX tag from `<` to `>` or `/>`.
 /// In MDX mode, ALL tags are JSX. Returns total byte length if matched.
 pub(crate) fn scan_mdx_inline_jsx(bytes: &[u8]) -> Option<usize> {
+    scan_mdx_inline_jsx_inner(bytes, None)
+}
+
+fn scan_mdx_inline_jsx_inner(
+    bytes: &[u8],
+    container_check: Option<ContainerLineCheck<'_>>,
+) -> Option<usize> {
     if bytes.len() < 2 || bytes[0] != b'<' {
         return None;
     }
@@ -574,33 +683,22 @@ pub(crate) fn scan_mdx_inline_jsx(bytes: &[u8]) -> Option<usize> {
         return Some(name_start + 1);
     }
 
-    // Must start with an ASCII letter, `_`, or `$`
-    let first = bytes[name_start];
-    if !first.is_ascii_alphabetic() && first != b'_' && first != b'$' && first < 0x80 {
+    if !is_jsx_name_start(bytes, name_start) {
         return None;
     }
 
-    // Scan the tag name: letters, digits, `-`, `.` are valid name characters.
-    let mut ix = name_start + 1;
+    let mut ix = name_start + char_len_utf8(bytes[name_start]);
     while ix < bytes.len() {
-        match bytes[ix] {
-            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'$' => ix += 1,
-            // Namespace separator (e.g. `xml:space`): must be followed by a
-            // valid name-start character.
-            b':' => {
-                ix += 1;
-                if ix >= bytes.len() {
-                    return None;
-                }
-                let ch = bytes[ix];
-                if !ch.is_ascii_alphabetic() && ch != b'_' && ch != b'$' && ch < 0x80 {
-                    return None;
-                }
-                ix += 1;
+        if bytes[ix] == b':' {
+            ix += 1;
+            if ix >= bytes.len() || !is_jsx_name_start(bytes, ix) {
+                return None;
             }
-            // Non-ASCII UTF-8 byte: allow (component names can use Unicode)
-            0x80.. => ix += 1,
-            _ => break,
+            ix += char_len_utf8(bytes[ix]);
+        } else if is_jsx_name_continue(bytes, ix) {
+            ix += char_len_utf8(bytes[ix]);
+        } else {
+            break;
         }
     }
 
@@ -608,7 +706,8 @@ pub(crate) fn scan_mdx_inline_jsx(bytes: &[u8]) -> Option<usize> {
     // This rejects patterns like `<https://...>`.
     if ix < bytes.len() {
         match bytes[ix] {
-            b'>' | b'/' | b' ' | b'\t' | b'\n' | b'\r' | b'{' => {}
+            b'>' | b'/' | b'{' => {}
+            _ if is_mdx_unicode_whitespace(bytes, ix) => {}
             _ => return None,
         }
     }
@@ -655,17 +754,18 @@ pub(crate) fn scan_mdx_inline_jsx(bytes: &[u8]) -> Option<usize> {
                 }
             }
             b'\n' | b'\r' => {
-                // Multi-line JSX: keep scanning (attributes/values can span lines).
                 ix += 1;
                 if ix < bytes.len() && bytes[ix - 1] == b'\r' && bytes[ix] == b'\n' {
                     ix += 1;
                 }
+                check_container_after_newline(bytes, &mut ix, &container_check)?;
             }
             _ => ix += 1,
         }
     }
     None
 }
+
 
 impl<'a, 'b> FirstPass<'a, 'b> {
     pub(crate) fn parse_mdx_esm(&mut self, start_ix: usize, end_ix: usize) -> usize {
@@ -680,22 +780,62 @@ impl<'a, 'b> FirstPass<'a, 'b> {
     }
 
     pub(crate) fn parse_mdx_jsx_flow(&mut self, start_ix: usize, end_ix: usize) -> usize {
-        let raw = &self.text[start_ix..end_ix].trim_end();
-        let jsx_data = parse_jsx_tag(raw);
-        let jsx_ix = self.allocs.allocate_jsx_element(jsx_data);
-        self.tree.append(Item {
-            start: start_ix,
-            end: end_ix,
-            body: ItemBody::MdxJsxFlowElement(jsx_ix),
-        });
+        let raw = {
+            let stripped = self.strip_container_prefixes(start_ix, end_ix);
+            stripped.trim_end().to_string()
+        };
+
+        let mut pos = 0;
+        while pos < raw.len() {
+            while pos < raw.len() && raw.as_bytes()[pos] == b' ' {
+                pos += 1;
+            }
+            if pos >= raw.len() {
+                break;
+            }
+            let remaining = &raw.as_bytes()[pos..];
+            if remaining[0] == b'<' {
+                let tag_end = scan_mdx_jsx_tag_end(remaining)
+                    .unwrap_or(raw.len() - pos);
+                let tag_raw = &raw[pos..pos + tag_end];
+                let jsx_data = parse_jsx_tag(tag_raw).into_static();
+                let jsx_ix = self.allocs.allocate_jsx_element(jsx_data);
+                self.tree.append(Item {
+                    start: start_ix + pos,
+                    end: start_ix + pos + tag_end,
+                    body: ItemBody::MdxJsxFlowElement(jsx_ix),
+                });
+                pos += tag_end;
+            } else if remaining[0] == b'{' {
+                let expr_end = scan_mdx_expression_end(remaining, true)
+                    .unwrap_or(raw.len() - pos);
+                let inner: CowStr<'static> = CowStr::from(raw[pos + 1..pos + expr_end - 1].to_string());
+                let cow_ix = self.allocs.allocate_cow(inner);
+                self.tree.append(Item {
+                    start: start_ix + pos,
+                    end: start_ix + pos + expr_end,
+                    body: ItemBody::MdxFlowExpression(cow_ix),
+                });
+                pos += expr_end;
+            } else {
+                break;
+            }
+        }
         end_ix
     }
 
     pub(crate) fn parse_mdx_flow_expression(&mut self, start_ix: usize, end_ix: usize) -> usize {
-        // Content is between the outer `{` and `}`.
         let raw = &self.text[start_ix..end_ix].trim_end();
-        let inner = &raw[1..raw.len() - 1]; // strip `{` and `}`
-        let cow_ix = self.allocs.allocate_cow(inner.into());
+        let inner = if self.tree.spine_len() > 0 {
+            let stripped = self.strip_container_prefixes(start_ix, end_ix);
+            let stripped = stripped.trim_end();
+            CowStr::from(alloc::string::String::from(
+                &stripped[1..stripped.len() - 1],
+            ))
+        } else {
+            (&raw[1..raw.len() - 1]).into()
+        };
+        let cow_ix = self.allocs.allocate_cow(inner);
         self.tree.append(Item {
             start: start_ix,
             end: end_ix,
@@ -703,9 +843,100 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         });
         end_ix
     }
+
+    /// Strip container prefixes from continuation lines in a raw text span.
+    /// Returns the original text if not inside a container.
+    fn strip_container_prefixes(
+        &self,
+        start_ix: usize,
+        end_ix: usize,
+    ) -> alloc::borrow::Cow<'_, str> {
+        if self.tree.spine_len() == 0 {
+            return alloc::borrow::Cow::Borrowed(&self.text[start_ix..end_ix]);
+        }
+
+        let bytes = self.text.as_bytes();
+        let mut result = alloc::string::String::new();
+        let mut pos = start_ix;
+
+        // First line: copy as-is via string slice
+        let line_end = memchr::memchr2(b'\n', b'\r', &bytes[pos..end_ix])
+            .map(|i| pos + i)
+            .unwrap_or(end_ix);
+        result.push_str(&self.text[pos..line_end]);
+        pos = line_end;
+
+        while pos < end_ix {
+            // Copy newline
+            if bytes[pos] == b'\r' {
+                result.push('\r');
+                pos += 1;
+            }
+            if pos < end_ix && bytes[pos] == b'\n' {
+                result.push('\n');
+                pos += 1;
+            }
+
+            if pos >= end_ix {
+                break;
+            }
+
+            // Strip container prefix
+            let mut ls = LineStart::new(&bytes[pos..]);
+            let _ = scan_containers(&self.tree, &mut ls, self.options);
+            pos += ls.bytes_scanned();
+
+            // Copy rest of line via string slice
+            let line_end = memchr::memchr2(b'\n', b'\r', &bytes[pos..end_ix])
+                .map(|i| pos + i)
+                .unwrap_or(end_ix);
+            result.push_str(&self.text[pos..line_end]);
+            pos = line_end;
+        }
+
+        alloc::borrow::Cow::Owned(result)
+    }
 }
 
-use crate::parse::{JsxAttr, JsxElementData};
+use crate::{
+    parse::{scan_containers, JsxAttr, JsxElementData},
+    scanners::LineStart,
+};
+
+impl<'a, 'b> FirstPass<'a, 'b> {
+    /// Build a closure that checks whether a line starts with the expected
+    /// container prefix. Returns the number of prefix bytes to skip, or `None`
+    /// for a lazy continuation.
+    pub(crate) fn make_container_line_check(&self) -> impl Fn(&[u8]) -> Option<usize> + '_ {
+        move |line_bytes: &[u8]| {
+            let mut ls = LineStart::new(line_bytes);
+            let matched = scan_containers(&self.tree, &mut ls, self.options);
+            if matched == self.tree.spine_len() {
+                Some(ls.bytes_scanned())
+            } else {
+                None
+            }
+        }
+    }
+
+    /// Scan for a flow-level MDX block (expression or JSX), handling container
+    /// prefixes on continuation lines. Delegates to the scanner directly when
+    /// not inside a container; uses the container-aware variant otherwise.
+    pub(crate) fn scan_mdx_flow_in_container(
+        &self,
+        ix: usize,
+        scanner: impl Fn(&[u8], Option<ContainerLineCheck<'_>>) -> Option<usize>,
+    ) -> Option<usize> {
+        let bytes = self.text.as_bytes();
+
+        if self.tree.spine_len() == 0 {
+            return scanner(&bytes[ix..], None);
+        }
+
+        let check = self.make_container_line_check();
+        scanner(&bytes[ix..], Some(&check))
+    }
+}
 
 /// Parse a raw JSX tag string into structured `JsxElementData`.
 ///
@@ -900,10 +1131,11 @@ fn parse_jsx_attrs<'a>(text: &'a str) -> Vec<JsxAttr<'a>> {
                     }
                     i += 1;
                 }
-                let value = &tag[val_start..i];
+                let raw_value = &tag[val_start..i];
                 if i < len {
                     i += 1;
                 }
+                let value = strip_attr_continuation_indent(raw_value);
                 attrs.push(JsxAttr::Literal(name.into(), value.into()));
             } else if bytes[i] == b'{' {
                 i += 1;
