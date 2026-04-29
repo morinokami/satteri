@@ -27,7 +27,6 @@ import type {
   List,
   ListItem,
   Paragraph,
-  Root,
   Strong,
   Table,
   TableRow,
@@ -39,6 +38,11 @@ import type {
 import type { MdxJsxFlowElement, MdxJsxTextElement } from "../mdx-types.js";
 import type { MdxFlowExpression, MdxTextExpression } from "../mdx-types.js";
 import type { MdxjsEsm } from "../mdx-types.js";
+import type {
+  ContainerDirective,
+  LeafDirective,
+  TextDirective,
+} from "../directive-types.js";
 
 const MutationType = {
   Replace: "replace",
@@ -69,7 +73,6 @@ export interface MdastDiagnostic {
 }
 
 const VISITOR_KEYS = new Set([
-  "root",
   "paragraph",
   "heading",
   "thematicBreak",
@@ -98,6 +101,9 @@ const VISITOR_KEYS = new Set([
   "toml",
   "math",
   "inlineMath",
+  "containerDirective",
+  "leafDirective",
+  "textDirective",
   "mdxJsxFlowElement",
   "mdxJsxTextElement",
   "mdxFlowExpression",
@@ -219,7 +225,6 @@ type MdastVisitorFn<N extends MdastNode = MdastNode> = (
 ) => MdastVisitorResult | Promise<MdastVisitorResult>;
 
 export interface MdastPluginInstance {
-  root?: MdastVisitorFn<Root>;
   paragraph?: MdastVisitorFn<Paragraph>;
   heading?: MdastVisitorFn<Heading>;
   thematicBreak?: MdastVisitorFn<ThematicBreak>;
@@ -248,6 +253,9 @@ export interface MdastPluginInstance {
   toml?: MdastVisitorFn<Toml>;
   math?: MdastVisitorFn<MathNode>;
   inlineMath?: MdastVisitorFn<InlineMath>;
+  containerDirective?: MdastVisitorFn<ContainerDirective>;
+  leafDirective?: MdastVisitorFn<LeafDirective>;
+  textDirective?: MdastVisitorFn<TextDirective>;
   mdxJsxFlowElement?: MdastVisitorFn<MdxJsxFlowElement>;
   mdxJsxTextElement?: MdastVisitorFn<MdxJsxTextElement>;
   mdxFlowExpression?: MdastVisitorFn<MdxFlowExpression>;
@@ -588,6 +596,31 @@ function readMdastMatchedNode(
       pos += 2;
       const alignNames: (string | null)[] = [null, "left", "right", "center"];
       node.align = Array.from({ length: count }, (_, i) => alignNames[buf[pos + i]!] ?? null);
+      break;
+    }
+    case 30:
+    case 31:
+    case 32: {
+      // containerDirective, leafDirective, textDirective
+      const nameLen = ru16(view, pos);
+      pos += 2;
+      node.name = rstr(buf, pos, nameLen);
+      pos += nameLen;
+      const attrCount = ru16(view, pos);
+      pos += 2;
+      const attributes: Record<string, string> = {};
+      for (let i = 0; i < attrCount; i++) {
+        const keyLen = ru16(view, pos);
+        pos += 2;
+        const key = rstr(buf, pos, keyLen);
+        pos += keyLen;
+        const valLen = ru16(view, pos);
+        pos += 2;
+        const val = rstr(buf, pos, valLen);
+        pos += valLen;
+        attributes[key] = val;
+      }
+      node.attributes = attributes;
       break;
     }
     case 100:

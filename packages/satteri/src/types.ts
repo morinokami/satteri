@@ -19,6 +19,14 @@ export type {
   MdxjsEsm,
 } from "./mdx-types.js";
 
+// Re-export directive types (also augments the mdast content maps).
+export type {
+  ContainerDirective,
+  LeafDirective,
+  TextDirective,
+  DirectiveAttributes,
+} from "./directive-types.js";
+
 import type { MdxJsxAttribute, MdxJsxExpressionAttribute } from "./mdx-types.js";
 
 export type MdxJsxAttributeUnion = MdxJsxAttribute | MdxJsxExpressionAttribute;

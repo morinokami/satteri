@@ -276,3 +276,89 @@ test("context.replaceNode() replaces a node via context method", () => {
   expect(html).not.toContain("<h1>");
   expect(html).toContain("Replaced");
 });
+
+// Directive visitors
+
+function setupDirective(md: string) {
+  const handle = createMdastHandle(md, { directive: true });
+  const source = getHandleSource(handle);
+  return { handle, source };
+}
+
+test("containerDirective visitor fires and exposes name + attributes", () => {
+  const { handle, source } = setupDirective(":::tip{.note #id}\nbody\n:::\n");
+  const seen: { name: string; attributes: Record<string, string> }[] = [];
+  const plugin: MdastPluginInstance = {
+    containerDirective(node) {
+      seen.push({ name: node.name, attributes: { ...(node.attributes ?? {}) } });
+    },
+  };
+  const subs = resolveMdastSubscriptions(plugin);
+  expect(subs.length).toBe(1);
+  visitMdastHandle(handle, plugin, subs, source, "<test>");
+  expect(seen.length).toBe(1);
+  expect(seen[0]!.name).toBe("tip");
+  expect(seen[0]!.attributes.id).toBe("id");
+  expect(seen[0]!.attributes.class).toBe("note");
+});
+
+test("containerDirective with [label] exposes directiveLabel marker on first child", () => {
+  const { handle, source } = setupDirective(":::warning[Heads up]\ncontent\n:::\n");
+  let labelChildHadMarker = false;
+  const plugin: MdastPluginInstance = {
+    containerDirective(node) {
+      const first = node.children[0] as { data?: { directiveLabel?: boolean } } | undefined;
+      labelChildHadMarker = first?.data?.directiveLabel === true;
+    },
+  };
+  const subs = resolveMdastSubscriptions(plugin);
+  visitMdastHandle(handle, plugin, subs, source, "<test>");
+  expect(labelChildHadMarker).toBe(true);
+});
+
+test("leafDirective visitor fires and exposes name", () => {
+  const { handle, source } = setupDirective("::break{aria-label=section}\n");
+  const seen: { name: string; attributes: Record<string, string> }[] = [];
+  const plugin: MdastPluginInstance = {
+    leafDirective(node) {
+      seen.push({ name: node.name, attributes: { ...(node.attributes ?? {}) } });
+    },
+  };
+  const subs = resolveMdastSubscriptions(plugin);
+  visitMdastHandle(handle, plugin, subs, source, "<test>");
+  expect(seen.length).toBe(1);
+  expect(seen[0]!.name).toBe("break");
+  expect(seen[0]!.attributes["aria-label"]).toBe("section");
+});
+
+test("textDirective visitor fires inside a paragraph", () => {
+  const { handle, source } = setupDirective("Hello :emoji[smile]{.big} world\n");
+  const seen: string[] = [];
+  const plugin: MdastPluginInstance = {
+    textDirective(node) {
+      seen.push(node.name);
+    },
+  };
+  const subs = resolveMdastSubscriptions(plugin);
+  visitMdastHandle(handle, plugin, subs, source, "<test>");
+  expect(seen).toEqual(["emoji"]);
+});
+
+test("containerDirective replaceNode rewrites to an aside-style block", () => {
+  const handle = createMdastHandle(":::tip\nbody\n:::\n", { directive: true });
+  const source = getHandleSource(handle);
+  const plugin: MdastPluginInstance = {
+    containerDirective(node, ctx) {
+      ctx.replaceNode(node, { rawHtml: `<aside class="${node.name}">body</aside>` } as never);
+    },
+  };
+  const subs = resolveMdastSubscriptions(plugin);
+  const result = visitMdastHandle(handle, plugin, subs, source, "<test>") as {
+    commandBuffer: Uint8Array;
+    hasMutations: boolean;
+  };
+  expect(result.hasMutations).toBe(true);
+  const hastHandle = applyCommandsAndConvertToHastHandle(handle, result.commandBuffer);
+  const html = renderHandle(hastHandle);
+  expect(html).toContain('<aside class="tip">body</aside>');
+});
