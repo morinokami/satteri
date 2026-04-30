@@ -173,6 +173,14 @@ describe("Directive MDAST conformance", () => {
         DIR,
       );
     });
+
+    test("directive attached to preceding word with no space", () => {
+      // Regression: prose like `is:inline` (an Astro attribute name written
+      // bare, not in backticks) parses as text + textDirective `:inline`.
+      // Both remark and satteri must agree, so plugin payloads carrying this
+      // directive round-trip through the JS<->Rust JSON boundary.
+      assertExtMdastConformance("Add is:inline to the slot.", DIR);
+    });
   });
 
   describe("edge cases", () => {

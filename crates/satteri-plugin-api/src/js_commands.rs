@@ -507,8 +507,19 @@ fn encode_js_node_data(
         }
         MdastNodeType::MdxJsxFlowElement | MdastNodeType::MdxJsxTextElement => {
             let name_ref = alloc_opt_str(builder, js_node.name.as_deref());
-            let attr_tuples = encode_js_jsx_attrs(builder, js_node.attributes.as_deref());
+            let attr_tuples = encode_js_jsx_attrs(
+                builder,
+                js_node.attributes.as_ref().and_then(|a| a.as_jsx()),
+            );
             encode_mdx_jsx_element_data(name_ref, &attr_tuples)
+        }
+        MdastNodeType::ContainerDirective
+        | MdastNodeType::LeafDirective
+        | MdastNodeType::TextDirective => {
+            let name = js_node.name.as_deref().unwrap_or("");
+            let name_ref = builder.alloc_string(name);
+            let attr_pairs = encode_js_directive_attrs(builder, js_node.attributes.as_ref());
+            encode_directive_data(name_ref, &attr_pairs)
         }
         MdastNodeType::MdxFlowExpression
         | MdastNodeType::MdxTextExpression
@@ -519,6 +530,21 @@ fn encode_js_node_data(
         // Nodes with no type-specific data
         _ => Vec::new(),
     }
+}
+
+fn encode_js_directive_attrs(
+    builder: &mut ArenaBuilder,
+    attrs: Option<&satteri_ast::commands::JsNodeAttributes>,
+) -> Vec<(StringRef, StringRef)> {
+    let Some(map) = attrs.and_then(|a| a.as_directive()) else {
+        return Vec::new();
+    };
+    map.iter()
+        .filter_map(|(k, v)| {
+            let val = v.as_str()?;
+            Some((builder.alloc_string(k), builder.alloc_string(val)))
+        })
+        .collect()
 }
 
 fn alloc_opt_str(builder: &mut ArenaBuilder, s: Option<&str>) -> StringRef {
@@ -559,6 +585,9 @@ fn name_to_node_type(name: &str) -> Result<MdastNodeType, CommandError> {
         "toml" => Ok(MdastNodeType::Toml),
         "math" => Ok(MdastNodeType::Math),
         "inlineMath" => Ok(MdastNodeType::InlineMath),
+        "containerDirective" => Ok(MdastNodeType::ContainerDirective),
+        "leafDirective" => Ok(MdastNodeType::LeafDirective),
+        "textDirective" => Ok(MdastNodeType::TextDirective),
         "mdxJsxFlowElement" => Ok(MdastNodeType::MdxJsxFlowElement),
         "mdxJsxTextElement" => Ok(MdastNodeType::MdxJsxTextElement),
         "mdxFlowExpression" => Ok(MdastNodeType::MdxFlowExpression),
@@ -795,7 +824,10 @@ fn encode_hast_js_node_data(
                 .or(js_node.tag_name.as_deref())
                 .unwrap_or("");
             let name_ref = builder.alloc_string(name);
-            let attr_tuples = encode_js_jsx_attrs(builder, js_node.attributes.as_deref());
+            let attr_tuples = encode_js_jsx_attrs(
+                builder,
+                js_node.attributes.as_ref().and_then(|a| a.as_jsx()),
+            );
             encode_mdx_jsx_element_data(name_ref, &attr_tuples)
         }
 
@@ -1099,6 +1131,66 @@ mod tests {
         );
         let heading_data = result.get_type_data(new_heading);
         assert_eq!(decode_heading_data(heading_data).depth, 2);
+    }
+
+    #[test]
+    fn replace_with_directive_child() {
+        // Directives serialize `attributes` as a map (`{}`), not the array form
+        // used by MDX JSX. The deserializer must accept both shapes; without
+        // that, any plugin returning a tree containing a directive child fails
+        // with "invalid type: map, expected a sequence".
+        let arena = build_hello_world();
+        let heading_id = arena.get_children(0)[0];
+
+        let json = r#"{"type":"paragraph","children":[{"type":"text","value":"hi "},{"type":"textDirective","name":"inline","attributes":{},"children":[]}]}"#;
+        let mut buf = Vec::new();
+        buf.push(CMD_REPLACE);
+        push_u32(&mut buf, heading_id);
+        buf.push(PAYLOAD_SERDE_JSON);
+        push_u32(&mut buf, json.len() as u32);
+        buf.extend_from_slice(json.as_bytes());
+
+        let result = apply_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let root_children = result.get_children(0);
+        let new_para = root_children[0];
+        assert_eq!(
+            result.get_node(new_para).node_type,
+            MdastNodeType::Paragraph as u8
+        );
+        let para_children = result.get_children(new_para);
+        assert_eq!(para_children.len(), 2);
+        let directive = para_children[1];
+        assert_eq!(
+            result.get_node(directive).node_type,
+            MdastNodeType::TextDirective as u8
+        );
+        let dir_data = result.get_type_data(directive);
+        assert_eq!(decode_directive_attr_count(dir_data), 0);
+    }
+
+    #[test]
+    fn replace_with_directive_attrs() {
+        // Same as above but with non-empty directive attrs to confirm the map
+        // shape round-trips into the arena's directive type_data.
+        let arena = build_hello_world();
+        let heading_id = arena.get_children(0)[0];
+
+        let json = r#"{"type":"containerDirective","name":"tip","attributes":{"id":"foo","class":"bar"},"children":[]}"#;
+        let mut buf = Vec::new();
+        buf.push(CMD_REPLACE);
+        push_u32(&mut buf, heading_id);
+        buf.push(PAYLOAD_SERDE_JSON);
+        push_u32(&mut buf, json.len() as u32);
+        buf.extend_from_slice(json.as_bytes());
+
+        let result = apply_commands(arena.clone(), &buf, &test_parse_markdown).unwrap();
+        let directive = result.get_children(0)[0];
+        assert_eq!(
+            result.get_node(directive).node_type,
+            MdastNodeType::ContainerDirective as u8
+        );
+        let dir_data = result.get_type_data(directive);
+        assert_eq!(decode_directive_attr_count(dir_data), 2);
     }
 
     #[test]

@@ -30,7 +30,7 @@ pub struct JsNode {
     pub reference_type: Option<String>,
     pub name: Option<String>,
     #[serde(default)]
-    pub attributes: Option<Vec<JsNodeAttribute>>,
+    pub attributes: Option<JsNodeAttributes>,
     // HAST-specific fields
     #[serde(rename = "tagName")]
     pub tag_name: Option<String>,
@@ -58,6 +58,34 @@ pub enum JsNodeAttribute {
     },
     #[serde(rename = "mdxJsxExpressionAttribute")]
     ExpressionAttribute { value: String },
+}
+
+/// `attributes` on a JS node has two shapes depending on the node type:
+/// MDX JSX elements use a list of `{type, name, value}` records, while
+/// directive nodes (`containerDirective` / `leafDirective` / `textDirective`)
+/// use a flat `{key: stringValue}` map. Untagged so serde tries the array
+/// shape first and falls back to the map.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum JsNodeAttributes {
+    Jsx(Vec<JsNodeAttribute>),
+    Directive(serde_json::Map<String, serde_json::Value>),
+}
+
+impl JsNodeAttributes {
+    pub fn as_jsx(&self) -> Option<&[JsNodeAttribute]> {
+        match self {
+            Self::Jsx(v) => Some(v.as_slice()),
+            Self::Directive(_) => None,
+        }
+    }
+
+    pub fn as_directive(&self) -> Option<&serde_json::Map<String, serde_json::Value>> {
+        match self {
+            Self::Directive(m) => Some(m),
+            Self::Jsx(_) => None,
+        }
+    }
 }
 
 #[derive(Debug)]
