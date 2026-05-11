@@ -20,7 +20,7 @@
     },
     "website": {
       "entry": ["assets/**/*.{ts,css}"],
-      "ignoreDependencies": ["@tailwindcss/cli"],
+      "ignoreDependencies": ["@tailwindcss/cli", "wrangler"],
       "ignoreBinaries": ["maudit"]
     }
   },

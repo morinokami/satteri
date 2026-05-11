@@ -12,5 +12,8 @@
     "satteri": "workspace:*",
     "shiki": "^4.0.2",
     "tailwindcss": "^4.1.18"
+  },
+  "devDependencies": {
+    "wrangler": "^4.90.0"
   }
 }
