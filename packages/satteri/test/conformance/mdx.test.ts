@@ -110,6 +110,28 @@ describe("MDX conformance: JSX", () => {
     await assertMdxConformance("<Foo\n  bar={1}/>", { Foo });
   });
 
+  // HTML entities in JSX text content (e.g. `<li>foo &gt; bar</li>`) must be
+  // decoded before reaching the runtime — otherwise the literal `&` gets
+  // re-escaped to `&amp;` on render, producing `&amp;gt;`. Discovered while
+  // running mdx-eval conformance against the cloudflare-docs corpus.
+  test("HTML entity in JSX text content", async () => {
+    await assertMdxConformance("<p>tab &gt; arrow</p>");
+    await assertMdxConformance("<p>amp &amp; sand</p>");
+    await assertMdxConformance("<p>numeric &#62; ref</p>");
+  });
+
+  test("HTML entity in JSX text inside flow expression", async () => {
+    await assertMdxConformance("{ true && (<ol><li>foo &gt; bar</li></ol>) }");
+  });
+
+  // Multi-line JSX attribute expressions go through a dedent pass: the
+  // expression value carries the original indentation for mdast/hast output,
+  // but the JS handed to the parser has container-imposed indent stripped.
+  // Regression for the U+F002 phantom-space sentinel pipeline.
+  test("multi-line JSX attribute expression with indent", async () => {
+    await assertMdxConformance("<Foo bar={\n  1 +\n    2\n}/>", { Foo });
+  });
+
   // The attribute-name parser used to be ASCII-only and dropped any name
   // whose start char wasn't `[a-zA-Z_]` — including `$` and Unicode
   // identifier starts that acorn accepts.
@@ -288,6 +310,26 @@ describe("MDX conformance: error cases", () => {
   test("rejects unclosed JSX tag", async () => {
     await assertBothReject("<Foo");
   });
+
+  // acorn (mdx-js) rejects legacy octals (`01`) and non-octal decimal
+  // literals (`08`, `09`) in any expression context because module sources
+  // are strict mode. oxc accepts them silently — we surface them as parse
+  // errors in `try_parse_expression_body`.
+  test("rejects legacy octal literal `01`", async () => {
+    await assertBothReject("{01}");
+  });
+
+  test("rejects legacy octal literal `0123`", async () => {
+    await assertBothReject("{0123}");
+  });
+
+  test("rejects non-octal-decimal `09`", async () => {
+    await assertBothReject("{09}");
+  });
+
+  test("rejects legacy octal in nested expression", async () => {
+    await assertBothReject("{1 + 02}");
+  });
 });
 
 describe("MDX conformance: escaped and special chars", () => {
@@ -385,16 +427,65 @@ describe("MDX conformance: markdown elements", () => {
   });
 
   // mdx-js does not evaluate expressions inside link URLs — `{...}` in URL
-  // position is literal text. Our firstpass used to eagerly scan `{` as an
-  // expression start and hard-error on unmatched `{` (e.g. `[a]({)`).
-  // Suppressing the scan in URL position fixes the crash and removes a
-  // brittle reliance on the link resolver to reabsorb stray expression
-  // tokens for the matched case.
+  // position is literal text. Our firstpass suppresses `{` expression scan
+  // only when the surrounding `(` will close on the same line (i.e. a real
+  // link). When the `(` is unmatched (e.g. `[>>](}{{`), the link doesn't
+  // form and the `{` falls through to expression scanning — matching mdx-js
+  // which errors on the dangling brace.
   test("`{` inside link URL is literal text", async () => {
     await assertMdxConformance("[a]({foo})");
     await assertMdxConformance("[a]({1+2})");
     await assertMdxConformance("[a](b{c}d)");
     await assertMdxConformance("[a]({)"); // previously crashed
+  });
+
+  test("unmatched `(` after `]` doesn't suppress `{` expression scan", async () => {
+    await assertBothReject("[>>](}{{");
+  });
+
+  test("unclosed link title with `{` falls through to expression scan", async () => {
+    await assertBothReject('[link](/uri "ti{w)');
+    await assertBothReject('\\\n     bar\n[link](/uri "ti\0{w)');
+  });
+
+  // Inline JSX spanning multiple paragraph lines must NOT be interrupted by a
+  // later `</div>` (or other type-1/6 HTML tag) on its own line, because MDX
+  // disables HTML blocks entirely. Without this, the paragraph splits at
+  // `</div>` and the close never pairs with the inline `<div>` open.
+  test("inline `<div>...\\n.../</div>` with trailing text matches reference", async () => {
+    await assertMdxConformance("pre<div>xxx</div>after");
+    await assertMdxConformance("pre<div>\nxxx\n</div>after");
+  });
+
+  test("multi-line expression body inside heading rejects", async () => {
+    await assertBothReject("# {1 +\n2}q");
+    await assertBothReject("## {a\nb}");
+  });
+
+  // §A.1: a flow-mode open tag (`<Foo>` alone on its line) requires a
+  // matching flow-mode close (`</Foo>` alone on its line). When the close
+  // is in a paragraph (followed by content on its line), mdx-js rejects
+  // structurally — satteri's jsx_stack now tracks `is_flow` and errors
+  // on mode mismatch.
+  test("trailing text after `</Name>` on a flow line rejects", async () => {
+    await assertBothReject("<Foo>\n</Foo>X");
+    await assertBothReject("<Foo>\n</Foo>3c");
+    await assertBothReject("<Box>\n  child\n</Box>3c");
+    await assertBothReject("<Foo>\nbar</Foo>");
+    await assertBothReject("<Foo>\nbar</Foo>baz");
+  });
+
+  // §B: a JSX open inside a structural container (blockquote, listItem)
+  // must close within that container. arena_build snapshots jsx_stack on
+  // container open and drains entries on close, erroring on each one.
+  test("JSX opened in blockquote without proper continuation rejects", async () => {
+    await assertBothReject("><Box>\n  child\n</Box>");
+    await assertBothReject("> <Box>\n  child\n</Box>");
+    await assertBothReject("- <Box>\n  child");
+  });
+
+  test("JSX inside blockquote with proper `>` continuation accepts", async () => {
+    await assertMdxConformance("> <Box>\n>   child\n> </Box>", { Box });
   });
 
   test("inline code", async () => {
