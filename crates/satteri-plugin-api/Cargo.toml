@@ -11,3 +11,7 @@ satteri-arena = { workspace = true }
 satteri-ast = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[features]
+default = ["mdx"]
+mdx = ["satteri-ast/mdx"]

@@ -90,6 +90,7 @@ pub mod arena_build;
 mod entities;
 mod firstpass;
 mod linklabel;
+#[cfg(feature = "mdx")]
 mod mdx;
 mod parse;
 pub(crate) mod post_passes;
@@ -100,8 +101,10 @@ mod tree;
 
 use core::fmt::Display;
 
+#[cfg(feature = "mdx")]
+pub use crate::arena_build::MDX_OPTIONS;
 pub use crate::{
-    arena_build::{parse, DEFAULT_OPTIONS, MDX_OPTIONS},
+    arena_build::{parse, DEFAULT_OPTIONS},
     parse::{
         BrokenLink, BrokenLinkCallback, DefaultParserCallbacks, OffsetIter, Parser,
         ParserCallbacks, RefDefs,
@@ -319,11 +322,13 @@ pub enum Tag<'a> {
     ///   children
     /// </Component>
     /// ```
+    #[cfg(feature = "mdx")]
     #[cfg_attr(feature = "serde", serde(borrow))]
     MdxJsxFlowElement(CowStr<'a>),
 
     /// An MDX JSX element (text-level, i.e. inline).
     /// Only parsed and emitted with [`Options::ENABLE_MDX`].
+    #[cfg(feature = "mdx")]
     #[cfg_attr(feature = "serde", serde(borrow))]
     MdxJsxTextElement(CowStr<'a>),
 }
@@ -355,7 +360,9 @@ impl<'a> Tag<'a> {
             Tag::DefinitionList => TagEnd::DefinitionList,
             Tag::DefinitionListTitle => TagEnd::DefinitionListTitle,
             Tag::DefinitionListDefinition => TagEnd::DefinitionListDefinition,
+            #[cfg(feature = "mdx")]
             Tag::MdxJsxFlowElement(_) => TagEnd::MdxJsxFlowElement,
+            #[cfg(feature = "mdx")]
             Tag::MdxJsxTextElement(_) => TagEnd::MdxJsxTextElement,
         }
     }
@@ -430,7 +437,9 @@ impl<'a> Tag<'a> {
             Tag::DefinitionList => Tag::DefinitionList,
             Tag::DefinitionListTitle => Tag::DefinitionListTitle,
             Tag::DefinitionListDefinition => Tag::DefinitionListDefinition,
+            #[cfg(feature = "mdx")]
             Tag::MdxJsxFlowElement(s) => Tag::MdxJsxFlowElement(s.into_static()),
+            #[cfg(feature = "mdx")]
             Tag::MdxJsxTextElement(s) => Tag::MdxJsxTextElement(s.into_static()),
         }
     }
@@ -474,7 +483,9 @@ pub enum TagEnd {
 
     MetadataBlock(MetadataBlockKind),
 
+    #[cfg(feature = "mdx")]
     MdxJsxFlowElement,
+    #[cfg(feature = "mdx")]
     MdxJsxTextElement,
 }
 
@@ -677,6 +688,7 @@ pub enum Event<'a> {
     /// ```mdx
     /// {1 + 1}
     /// ```
+    #[cfg(feature = "mdx")]
     #[cfg_attr(feature = "serde", serde(borrow))]
     MdxFlowExpression(CowStr<'a>),
 
@@ -685,6 +697,7 @@ pub enum Event<'a> {
     /// ```mdx
     /// a]n {expression} here
     /// ```
+    #[cfg(feature = "mdx")]
     #[cfg_attr(feature = "serde", serde(borrow))]
     MdxTextExpression(CowStr<'a>),
 
@@ -694,6 +707,7 @@ pub enum Event<'a> {
     /// import {Chart} from './chart.js'
     /// export const meta = {}
     /// ```
+    #[cfg(feature = "mdx")]
     #[cfg_attr(feature = "serde", serde(borrow))]
     MdxEsm(CowStr<'a>),
 }
@@ -714,8 +728,11 @@ impl<'a> Event<'a> {
             Event::HardBreak => Event::HardBreak,
             Event::Rule => Event::Rule,
             Event::TaskListMarker(b) => Event::TaskListMarker(b),
+            #[cfg(feature = "mdx")]
             Event::MdxFlowExpression(s) => Event::MdxFlowExpression(s.into_static()),
+            #[cfg(feature = "mdx")]
             Event::MdxTextExpression(s) => Event::MdxTextExpression(s.into_static()),
+            #[cfg(feature = "mdx")]
             Event::MdxEsm(s) => Event::MdxEsm(s.into_static()),
         }
     }

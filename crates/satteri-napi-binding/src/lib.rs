@@ -158,6 +158,7 @@ fn features_to_options(features: Option<JsFeatures>, mdx: bool) -> satteri_pulld
 // MDX compilation options (JS-facing)
 
 /// Static optimization config passed from JavaScript.
+#[cfg(feature = "mdx")]
 #[napi(object)]
 pub struct JsOptimizeStaticConfig {
     /// Component/element name to wrap collapsed HTML in (e.g. "Fragment", "div").
@@ -171,6 +172,7 @@ pub struct JsOptimizeStaticConfig {
 }
 
 /// MDX compile options passed from JavaScript.
+#[cfg(feature = "mdx")]
 #[napi(object)]
 pub struct JsMdxOptions {
     /// Static subtree optimization. If provided, static subtrees are collapsed
@@ -258,6 +260,7 @@ fn js_convert_options_to_rust(
     out
 }
 
+#[cfg(feature = "mdx")]
 fn js_options_to_rust(opts: Option<JsMdxOptions>) -> satteri_mdxjs::Options {
     let mut options = satteri_mdxjs::Options::default();
     if let Some(js) = opts {
@@ -321,6 +324,7 @@ fn js_options_to_rust(opts: Option<JsMdxOptions>) -> satteri_mdxjs::Options {
 // MDX compilation
 
 /// Compile MDX source directly to JavaScript.
+#[cfg(feature = "mdx")]
 #[napi]
 pub fn compile_mdx(
     env: Env,
@@ -404,6 +408,7 @@ pub fn create_mdast_handle(source: String, features: Option<JsFeatures>) -> Resu
 }
 
 /// Parse MDX source into an MDAST arena handle.
+#[cfg(feature = "mdx")]
 #[napi]
 pub fn create_mdx_mdast_handle(
     source: String,
@@ -633,6 +638,7 @@ pub fn create_hast_handle(
 }
 
 /// Parse MDX source and convert to HAST. Returns an opaque handle.
+#[cfg(feature = "mdx")]
 #[napi]
 pub fn create_mdx_hast_handle(
     env: Env,
@@ -698,6 +704,7 @@ pub fn render_handle(handle: &HastHandle) -> Result<String> {
 }
 
 /// Compile a HAST handle's arena to MDX JavaScript. Does not consume the handle.
+#[cfg(feature = "mdx")]
 #[napi]
 pub fn compile_handle(handle: &HastHandle, options: Option<JsMdxOptions>) -> Result<String> {
     let mut arena = handle
@@ -720,12 +727,14 @@ pub fn compile_handle(handle: &HastHandle, options: Option<JsMdxOptions>) -> Res
 
 /// Parse a JavaScript expression and return its ESTree-compatible AST as a JSON string.
 /// Returns null if parsing fails. The JS layer calls JSON.parse (faster than serde_json → NAPI).
+#[cfg(feature = "mdx")]
 #[napi]
 pub fn parse_expression(source: String) -> Option<String> {
     satteri_mdxjs::parse_expression_to_estree_json(&source)
 }
 
 /// Parse ESM (import/export statements) and return ESTree-compatible AST as JSON.
+#[cfg(feature = "mdx")]
 #[napi]
 pub fn parse_esm(source: String) -> Option<String> {
     satteri_mdxjs::parse_esm_to_estree_json(&source)

@@ -6,12 +6,15 @@ use satteri_arena::{decode_string_ref_data, Arena, ArenaBuilder, Hast, Mdast, St
 use crate::hast::codec::encode_element_data_into;
 use crate::hast::HastNodeType;
 use crate::mdast::{
-    decode_code_data, decode_definition_data, decode_expression_data,
-    decode_footnote_definition_data, decode_heading_data, decode_image_data,
-    decode_image_reference_alt, decode_link_data, decode_list_data, decode_list_item_data,
-    decode_math_data, decode_mdx_jsx_attr, decode_mdx_jsx_attr_count, decode_mdx_jsx_element_name,
-    decode_mdx_jsx_explicit, decode_reference_data, decode_table_alignments,
-    encode_mdx_jsx_element_data, ColumnAlign, ListItemData, MdastNodeType,
+    decode_code_data, decode_definition_data, decode_footnote_definition_data, decode_heading_data,
+    decode_image_data, decode_image_reference_alt, decode_link_data, decode_list_data,
+    decode_list_item_data, decode_math_data, decode_reference_data, decode_table_alignments,
+    ColumnAlign, ListItemData, MdastNodeType,
+};
+#[cfg(feature = "mdx")]
+use crate::mdast::{
+    decode_expression_data, decode_mdx_jsx_attr, decode_mdx_jsx_attr_count,
+    decode_mdx_jsx_element_name, decode_mdx_jsx_explicit, encode_mdx_jsx_element_data,
 };
 use crate::shared::{PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_INT, PROP_SPACE_SEP, PROP_STRING};
 
@@ -1531,6 +1534,7 @@ fn convert_node(
             // `emit_gfm_footnotes_section` after the root's other children.
         }
 
+        #[cfg(feature = "mdx")]
         Some(MdastNodeType::MdxJsxFlowElement) => {
             convert_mdx_jsx_element(
                 node_id,
@@ -1540,6 +1544,7 @@ fn convert_node(
                 HastNodeType::MdxJsxElement as u8,
             );
         }
+        #[cfg(feature = "mdx")]
         Some(MdastNodeType::MdxJsxTextElement) => {
             convert_mdx_jsx_element(
                 node_id,
@@ -1550,6 +1555,7 @@ fn convert_node(
             );
         }
 
+        #[cfg(feature = "mdx")]
         Some(MdastNodeType::MdxFlowExpression) => {
             let data = view.get_type_data(node_id);
             let value = if data.is_empty() {
@@ -1575,6 +1581,7 @@ fn convert_node(
             );
         }
 
+        #[cfg(feature = "mdx")]
         Some(MdastNodeType::MdxTextExpression) => {
             let data = view.get_type_data(node_id);
             let value = if data.is_empty() {
@@ -1600,6 +1607,7 @@ fn convert_node(
             );
         }
 
+        #[cfg(feature = "mdx")]
         Some(MdastNodeType::MdxjsEsm) => {
             let data = view.get_type_data(node_id);
             let value = if data.is_empty() {
@@ -2180,6 +2188,7 @@ fn convert_table_row(
     builder.close_node(); // tr
 }
 
+#[cfg(feature = "mdx")]
 fn convert_mdx_jsx_element(
     node_id: u32,
     view: &Arena<Mdast>,
@@ -2256,6 +2265,7 @@ fn extract_text_recursive(node_id: u32, view: &Arena<Mdast>, out: &mut String) {
 mod hast_convert_tests {
     use super::*;
 
+    #[cfg(feature = "mdx")]
     #[test]
     fn multi_jsx_unraveled() {
         let source = "<Foo bar={1}/><Bar baz={2}/>\n";
@@ -2269,6 +2279,7 @@ mod hast_convert_tests {
         );
     }
 
+    #[cfg(feature = "mdx")]
     #[test]
     fn jsx_flow_with_full_options() {
         use satteri_pulldown_cmark::Options;

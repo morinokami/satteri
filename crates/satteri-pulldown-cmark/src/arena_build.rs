@@ -3,18 +3,23 @@
 
 use satteri_arena::{Arena, ArenaBuilder, LineIndex, Mdast, StringRef};
 use satteri_ast::mdast::{
-    encode_directive_data, encode_image_reference_data, encode_mdx_jsx_element_data,
-    encode_reference_data, encode_table_data, CodeData, ColumnAlign, DefinitionData,
-    ExpressionData, FootnoteDefinitionData, ImageData, LinkData, ListData, ListItemData, MathData,
-    MdastNodeType, ReferenceData,
+    encode_directive_data, encode_image_reference_data, encode_reference_data, encode_table_data,
+    CodeData, ColumnAlign, DefinitionData, FootnoteDefinitionData, ImageData, LinkData, ListData,
+    ListItemData, MathData, MdastNodeType, ReferenceData,
 };
+#[cfg(feature = "mdx")]
+use satteri_ast::mdast::{encode_mdx_jsx_element_data, ExpressionData};
+#[cfg(feature = "mdx")]
 use satteri_ast::shared::{
     MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
 };
 
-use crate::parse::{DefaultParserCallbacks, ItemBody, JsxAttr, ParserInner};
+use crate::parse::{DefaultParserCallbacks, ItemBody, ParserInner};
+#[cfg(feature = "mdx")]
+use crate::parse::JsxAttr;
 use crate::{Alignment, HeadingLevel, LinkType, Options};
 
+#[cfg(feature = "mdx")]
 use crate::post_passes::MDX_EXPLICIT_JSX_DATA;
 
 /// Default options: GFM (tables, strikethrough, task lists, autolink-literal),
@@ -33,6 +38,7 @@ pub const DEFAULT_OPTIONS: Options = Options::from_bits_truncate(
 );
 
 /// MDX options: default options plus JSX, expressions, and ESM.
+#[cfg(feature = "mdx")]
 pub const MDX_OPTIONS: Options =
     Options::from_bits_truncate(DEFAULT_OPTIONS.bits() | Options::ENABLE_MDX.bits());
 
@@ -772,6 +778,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         // content" rule by also concatenating the literal
                         // body of `{...}` expressions. e.g. `![{1+2}](u)` →
                         // alt = "1+2".
+                        #[cfg(feature = "mdx")]
                         ItemBody::MdxTextExpression(cow_ix)
                         | ItemBody::MdxFlowExpression(cow_ix) => {
                             let cow = inner.allocs.take_cow(*cow_ix);
@@ -1130,6 +1137,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         inner.tree.push();
                     }
                     // MDX JSX elements.
+                    #[cfg(feature = "mdx")]
                     ItemBody::MdxJsxFlowElement(jsx_ix) | ItemBody::MdxJsxTextElement(jsx_ix) => {
                         let is_flow = matches!(item.body, ItemBody::MdxJsxFlowElement(_));
                         let jsx = inner.allocs.take_jsx_element(jsx_ix);
@@ -1689,6 +1697,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         );
                         inner.tree.next_sibling(cur_ix);
                     }
+                    #[cfg(feature = "mdx")]
                     ItemBody::MdxFlowExpression(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
                         let sr = builder.alloc_string(&cow);
@@ -1704,6 +1713,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         );
                         inner.tree.next_sibling(cur_ix);
                     }
+                    #[cfg(feature = "mdx")]
                     ItemBody::MdxTextExpression(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
                         let sr = builder.alloc_string(&cow);
@@ -1719,6 +1729,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
                         );
                         inner.tree.next_sibling(cur_ix);
                     }
+                    #[cfg(feature = "mdx")]
                     ItemBody::MdxEsm(cow_ix) => {
                         let cow = inner.allocs.take_cow(cow_ix);
                         let sr = builder.alloc_string(&cow);
@@ -1847,6 +1858,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
     // and unrelated literal text); the actual passes still validate.
     let source_bytes = source.as_bytes();
 
+    #[cfg(feature = "mdx")]
     if options.contains(Options::ENABLE_MDX) && memchr::memchr2(b'<', b'{', source_bytes).is_some()
     {
         crate::post_passes::mdx_mark_and_unravel(&mut arena);
@@ -1879,6 +1891,7 @@ pub fn parse(source: &str, options: Options) -> (Arena<Mdast>, Vec<(usize, Strin
         if memchr::memchr(b'`', source_bytes).is_some() {
             crate::post_passes::directive_label_inline_code_pass(&mut arena);
         }
+        #[cfg(feature = "mdx")]
         if options.contains(Options::ENABLE_MDX)
             && memchr::memchr2(b'<', b'{', source_bytes).is_some()
         {
@@ -2254,8 +2267,10 @@ fn byte_offset_to_line_col(source: &str, offset: usize) -> String {
     format!("{line}:{col}")
 }
 
+#[cfg(feature = "mdx")]
 use crate::parse::JsxElementData;
 
+#[cfg(feature = "mdx")]
 fn encode_jsx_element_data(jsx: &JsxElementData<'_>, builder: &mut ArenaBuilder<Mdast>) -> Vec<u8> {
     let name_ref = if jsx.name.is_empty() {
         StringRef::empty()

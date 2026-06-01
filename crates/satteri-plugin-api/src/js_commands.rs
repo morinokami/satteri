@@ -44,9 +44,10 @@ use satteri_ast::mdast::codec::*;
 use satteri_ast::mdast::MdastNodeType;
 use satteri_ast::rebuild::Patch;
 use satteri_ast::shared::{
-    encode_js_jsx_attrs, PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_INT, PROP_NULL, PROP_SPACE_SEP,
-    PROP_STRING,
+    PROP_BOOL_FALSE, PROP_BOOL_TRUE, PROP_INT, PROP_NULL, PROP_SPACE_SEP, PROP_STRING,
 };
+#[cfg(feature = "mdx")]
+use satteri_ast::shared::encode_js_jsx_attrs;
 
 // Must match packages/satteri/src/command-buffer.ts
 const CMD_REMOVE: u8 = 0x01;
@@ -133,6 +134,7 @@ impl<'a> BufReader<'a> {
 
 /// Whether a plugin-supplied `data` blob carries the `_mdxExplicitJsx: true`
 /// marker — used to set the matching fast-path bit in `MdxJsxElementData`.
+#[cfg(feature = "mdx")]
 fn js_data_is_mdx_explicit(data: &Option<serde_json::Map<String, serde_json::Value>>) -> bool {
     data.as_ref()
         .and_then(|m| m.get("_mdxExplicitJsx"))
@@ -554,6 +556,7 @@ fn encode_js_node_data(
             let label_ref = alloc_opt_str(builder, js_node.label.as_deref());
             encode_footnote_definition_data(id_ref, label_ref)
         }
+        #[cfg(feature = "mdx")]
         MdastNodeType::MdxJsxFlowElement | MdastNodeType::MdxJsxTextElement => {
             let name_ref = alloc_opt_str(builder, js_node.name.as_deref());
             let attr_tuples = encode_js_jsx_attrs(
@@ -571,6 +574,7 @@ fn encode_js_node_data(
             let attr_pairs = encode_js_directive_attrs(builder, js_node.attributes.as_ref());
             encode_directive_data(name_ref, &attr_pairs)
         }
+        #[cfg(feature = "mdx")]
         MdastNodeType::MdxFlowExpression
         | MdastNodeType::MdxTextExpression
         | MdastNodeType::MdxjsEsm => {
@@ -638,10 +642,15 @@ fn name_to_node_type(name: &str) -> Result<MdastNodeType, CommandError> {
         "containerDirective" => Ok(MdastNodeType::ContainerDirective),
         "leafDirective" => Ok(MdastNodeType::LeafDirective),
         "textDirective" => Ok(MdastNodeType::TextDirective),
+        #[cfg(feature = "mdx")]
         "mdxJsxFlowElement" => Ok(MdastNodeType::MdxJsxFlowElement),
+        #[cfg(feature = "mdx")]
         "mdxJsxTextElement" => Ok(MdastNodeType::MdxJsxTextElement),
+        #[cfg(feature = "mdx")]
         "mdxFlowExpression" => Ok(MdastNodeType::MdxFlowExpression),
+        #[cfg(feature = "mdx")]
         "mdxTextExpression" => Ok(MdastNodeType::MdxTextExpression),
+        #[cfg(feature = "mdx")]
         "mdxjsEsm" => Ok(MdastNodeType::MdxjsEsm),
         other => Err(CommandError::UnknownNodeType(other.to_string())),
     }
@@ -797,10 +806,15 @@ fn name_to_hast_type(name: &str) -> Option<HastNodeType> {
         "comment" => Some(HastNodeType::Comment),
         "doctype" => Some(HastNodeType::Doctype),
         "raw" => Some(HastNodeType::Raw),
+        #[cfg(feature = "mdx")]
         "mdxJsxFlowElement" => Some(HastNodeType::MdxJsxElement),
+        #[cfg(feature = "mdx")]
         "mdxJsxTextElement" => Some(HastNodeType::MdxJsxTextElement),
+        #[cfg(feature = "mdx")]
         "mdxFlowExpression" => Some(HastNodeType::MdxFlowExpression),
+        #[cfg(feature = "mdx")]
         "mdxTextExpression" => Some(HastNodeType::MdxTextExpression),
+        #[cfg(feature = "mdx")]
         "mdxjsEsm" => Some(HastNodeType::MdxEsm),
         _ => None,
     }
@@ -874,6 +888,7 @@ fn encode_hast_js_node_data(
             out.to_vec()
         }
 
+        #[cfg(feature = "mdx")]
         HastNodeType::MdxJsxElement | HastNodeType::MdxJsxTextElement => {
             let name = js_node
                 .name
@@ -889,6 +904,7 @@ fn encode_hast_js_node_data(
             encode_mdx_jsx_element_data(name_ref, &attr_tuples, explicit)
         }
 
+        #[cfg(feature = "mdx")]
         HastNodeType::MdxFlowExpression
         | HastNodeType::MdxTextExpression
         | HastNodeType::MdxEsm => {

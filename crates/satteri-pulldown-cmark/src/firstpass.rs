@@ -6,9 +6,10 @@ use core::{cmp::max, ops::Range};
 
 use unicase::UniCase;
 
+#[cfg(feature = "mdx")]
+use crate::mdx::*;
 use crate::{
     linklabel::{scan_link_label_rest, LinkLabel},
-    mdx::*,
     parse::{
         scan_containers, Allocations, DirectiveAttrData, FootnoteDef, HeadingAttributes, Item,
         ItemBody, LinkDef, LINK_MAX_NESTED_PARENS,
@@ -39,6 +40,7 @@ pub(crate) fn run_first_pass(
         brace_context_next: 0,
         brace_context_stack: Vec::new(),
         mdx_errors: Vec::new(),
+        #[cfg(feature = "mdx")]
         mdx_expr_allocator: oxc_allocator::Allocator::default(),
         pending_lazy_blockquote_close: false,
         doc_start: 0,
@@ -89,6 +91,7 @@ pub(crate) struct FirstPass<'a, 'b> {
     /// Reusable bump allocator for oxc parses (expression-body validation,
     /// ESM completeness checks). Avoids `Allocator::default()` heap alloc
     /// on every expression — the allocator is `reset()` between parses.
+    #[cfg(feature = "mdx")]
     pub(crate) mdx_expr_allocator: oxc_allocator::Allocator,
     /// Byte offset where the document's parseable content begins — 3 when
     /// a UTF-8 BOM is stripped, 0 otherwise. Used to gate
@@ -742,6 +745,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         }
 
         // MDX blocks, must be checked before HTML blocks since JSX looks like HTML.
+        #[cfg(feature = "mdx")]
         if self.options.contains(Options::ENABLE_MDX) {
             // MDX ESM: lines starting with `import` or `export`.
             // ESM is only valid at the document root — but a still-open
@@ -1907,6 +1911,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
                     backslash_escaped = false;
                     LoopInstruction::ContinueAndSkip(0)
                 }
+                #[cfg(feature = "mdx")]
                 b'{' if self.options.contains(Options::ENABLE_MDX) => {
                     // If `{` sits inside a pair of matching backtick runs on
                     // the current line, it's part of a code span's text —
@@ -3367,6 +3372,7 @@ impl<'a, 'b> FirstPass<'a, 'b> {
         // would be mis-read as a JSX close `>`. Re-check that specific case
         // with the spine's container prefix so multi-line JSX in blockquotes
         // correctly interrupts paragraphs.
+        #[cfg(feature = "mdx")]
         if self.options.contains(Options::ENABLE_MDX)
             && bytes.starts_with(b"<")
             && self
@@ -3562,6 +3568,20 @@ fn count_header_cols(
 ///
 /// Use `FirstPass::scan_paragraph_interrupt` in any context that allows
 /// tables to interrupt the paragraph.
+/// Whether an MDX JSX flow element or `{…}` flow expression at the line start
+/// interrupts a paragraph. In the lite (non-mdx) build this is always false —
+/// the gated `mdx::*` scanners don't exist there.
+#[cfg(feature = "mdx")]
+fn mdx_block_interrupts(bytes: &[u8], mdx: bool) -> bool {
+    (mdx && bytes.starts_with(b"<") && scan_mdx_jsx_block(bytes, None).is_some())
+        || (mdx && bytes.starts_with(b"{") && scan_mdx_expression_block(bytes, None).is_some())
+}
+
+#[cfg(not(feature = "mdx"))]
+fn mdx_block_interrupts(_bytes: &[u8], _mdx: bool) -> bool {
+    false
+}
+
 #[allow(clippy::too_many_arguments)]
 fn scan_paragraph_interrupt_no_table(
     bytes: &[u8],
@@ -3613,10 +3633,10 @@ fn scan_paragraph_interrupt_no_table(
             && !current_container
             && bytes.starts_with(b"<")
             && scan_html_type_7(bytes).is_some())
-        // MDX JSX flow elements also interrupt paragraphs
-        || (mdx && bytes.starts_with(b"<") && scan_mdx_jsx_block(bytes, None).is_some())
-        // MDX flow expressions (`{ ... }` spanning the full line) also interrupt
-        || (mdx && bytes.starts_with(b"{") && scan_mdx_expression_block(bytes, None).is_some())
+        // MDX JSX flow elements and `{ ... }` flow expressions also interrupt
+        // paragraphs. Behind a cfg-switched helper so the gated `mdx::*` scan
+        // functions aren't named in the lite build (where it returns false).
+        || mdx_block_interrupts(bytes, mdx)
         || definition_list
             && ((current_container
                 && tree.peek_up().is_some_and(|cur| {
@@ -3896,6 +3916,7 @@ fn scope_end_with_prefix(bytes: &[u8], cur_line_start: usize, prefix: usize) -> 
 ///
 /// CommonMark forbids URLs from spanning a blank line, so per-line scans
 /// are sufficient in both directions.
+#[cfg(feature = "mdx")]
 fn is_inside_link_url_parens(bytes: &[u8], pos: usize) -> bool {
     // Fast reject: walkback returns false on first newline, so a `(` past
     // the current line can't reach pos. Skip the walk when this line has
@@ -3962,6 +3983,7 @@ fn is_inside_link_url_parens(bytes: &[u8], pos: usize) -> bool {
 /// check for `is_inside_link_url_parens`: a malformed tail (e.g. plain
 /// URL followed by non-title bytes) means the link won't form, so any
 /// `{` between them should be treated as an expression start.
+#[cfg(feature = "mdx")]
 fn link_tail_well_formed(bytes: &[u8], lparen: usize, pos: usize) -> bool {
     let mut depth: i32 = 1;
     let mut k = lparen + 1;
@@ -4149,6 +4171,7 @@ fn link_tail_well_formed(bytes: &[u8], lparen: usize, pos: usize) -> bool {
 /// distinguish flow-position `{` (which follows mdx-js's strict-no-lazy
 /// flow rule) from text-position `{` after the block-level pass already
 /// failed to take it as flow.
+#[cfg(feature = "mdx")]
 fn is_at_paragraph_line_start(bytes: &[u8], pos: usize) -> bool {
     let mut j = pos;
     while j > 0 && bytes[j - 1] != b'\n' && bytes[j - 1] != b'\r' {
@@ -4203,6 +4226,17 @@ fn is_at_paragraph_line_start(bytes: &[u8], pos: usize) -> bool {
 /// interrupts on the line beginning at `ix` when a multi-line JSX tag from
 /// the previous line is still open — the would-be interrupt char (e.g. the
 /// closing `>`) actually belongs to the JSX tag.
+///
+/// In the lite (non-mdx) build the body is a `false` stub so the `&&`-guard
+/// call sites compile unchanged without naming the gated `mdx::*` scanners;
+/// `ENABLE_MDX` is never set there, so the real body would have returned
+/// without effect anyway.
+#[cfg(not(feature = "mdx"))]
+fn prev_line_has_open_inline_jsx(_bytes: &[u8], _ix: usize) -> bool {
+    false
+}
+
+#[cfg(feature = "mdx")]
 fn prev_line_has_open_inline_jsx(bytes: &[u8], ix: usize) -> bool {
     if ix == 0 || ix > bytes.len() {
         return false;
@@ -4254,6 +4288,14 @@ fn prev_line_has_open_inline_jsx(bytes: &[u8], ix: usize) -> bool {
 /// to suppress the first-pass `MdxTextExpression` handler for `{` that
 /// actually belongs to a JSX attribute spread or attribute value — those
 /// braces will be consumed by the inline JSX scanner in the second pass.
+///
+/// Lite (non-mdx) build: `false` stub, see [`prev_line_has_open_inline_jsx`].
+#[cfg(not(feature = "mdx"))]
+fn is_inside_open_inline_jsx_tag(_bytes: &[u8], _pos: usize) -> bool {
+    false
+}
+
+#[cfg(feature = "mdx")]
 fn is_inside_open_inline_jsx_tag(bytes: &[u8], pos: usize) -> bool {
     if pos == 0 || pos > bytes.len() {
         return false;
@@ -5011,6 +5053,7 @@ fn has_earlier_backtick_run(bytes: &[u8], pos: usize, count: usize) -> bool {
     false
 }
 
+#[cfg(feature = "mdx")]
 fn contains_blank_line(bytes: &[u8]) -> bool {
     let mut i = 0;
     let mut at_line_start = true;

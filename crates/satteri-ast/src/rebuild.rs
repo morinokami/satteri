@@ -273,7 +273,19 @@ fn emit_subtree<K: ArenaKind>(sub_arena: &Arena<K>, builder: &mut ArenaBuilder<K
         let sref = builder.alloc_string(sub_source);
         sref.offset
     };
-    emit_subtree_node(0, sub_arena, builder, source_base);
+
+    // Raw markdown / HTML returns are parsed into a full document with a Root
+    // at node 0. Splice the Root's children into the slot rather than the
+    // wrapper itself; 0, 1, or N children all behave (none → the slot is
+    // removed). Structured-node returns have a real node at 0, not a Root, so
+    // they skip this and emit unchanged.
+    if sub_arena.get_node(0).node_type == K::ROOT_TAG {
+        for child in sub_arena.get_children(0).to_vec() {
+            emit_subtree_node(child, sub_arena, builder, source_base);
+        }
+    } else {
+        emit_subtree_node(0, sub_arena, builder, source_base);
+    }
 }
 
 /// `source_base` is the offset added to StringRef offsets to remap them

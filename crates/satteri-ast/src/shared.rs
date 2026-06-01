@@ -11,18 +11,25 @@ pub const PROP_INT: u8 = 5;
 pub const PROP_NULL: u8 = 6;
 
 // MDX JSX attribute kinds (used in both MDAST and HAST MDX JSX element type_data)
+#[cfg(feature = "mdx")]
 pub const MDX_ATTR_BOOLEAN_PROP: u8 = 0; // name only, no value
+#[cfg(feature = "mdx")]
 pub const MDX_ATTR_LITERAL_PROP: u8 = 1; // name="literal"
+#[cfg(feature = "mdx")]
 pub const MDX_ATTR_EXPRESSION_PROP: u8 = 2; // name={expr}
+#[cfg(feature = "mdx")]
 pub const MDX_ATTR_SPREAD: u8 = 3; // {...expr}
 
+#[cfg(feature = "mdx")]
 use crate::commands::JsNodeAttribute;
+#[cfg(feature = "mdx")]
 use satteri_arena::{ArenaBuilder, ArenaKind, StringRef};
 
 /// Encode JSX attributes from a JS node into the arena tuple format.
 /// Used by both MDAST and HAST MDX JSX element paths; generic over `K`
 /// since attribute encoding only needs to allocate strings into the arena
 /// and doesn't dispatch on `node_type`.
+#[cfg(feature = "mdx")]
 pub fn encode_js_jsx_attrs<K: ArenaKind>(
     builder: &mut ArenaBuilder<K>,
     attrs: Option<&[JsNodeAttribute]>,

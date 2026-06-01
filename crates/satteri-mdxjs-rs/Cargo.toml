@@ -22,8 +22,8 @@ oxc_span = { workspace = true }
 oxc_syntax = { workspace = true }
 rustc-hash = { workspace = true }
 satteri-arena = { workspace = true }
-satteri-ast = { workspace = true }
-satteri-pulldown-cmark = { workspace = true }
+satteri-ast = { workspace = true, features = ["mdx"] }
+satteri-pulldown-cmark = { workspace = true, features = ["std", "mdx"] }
 serde = { workspace = true }
 unicode-id-start = { workspace = true }
 

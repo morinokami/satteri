@@ -239,6 +239,50 @@ describe("markdownToHtml", () => {
     expect(html).not.toContain("Original");
   });
 
+  test("raw return from a block (paragraph) visitor does not nest a root", () => {
+    const replace = defineMdastPlugin({
+      name: "replace-para",
+      paragraph() {
+        return { raw: "Lorem **ipsum** dolor." };
+      },
+    });
+
+    const { html } = markdownToHtml("placeholder", { mdastPlugins: [replace] });
+    expect(html.trim()).toBe("<p>Lorem <strong>ipsum</strong> dolor.</p>");
+  });
+
+  test("raw return parsing to several blocks splices them as siblings", () => {
+    const replace = defineMdastPlugin({
+      name: "expand-para",
+      paragraph() {
+        return { raw: "# Title\n\nBody." };
+      },
+    });
+
+    const { html } = markdownToHtml("placeholder", { mdastPlugins: [replace] });
+    expect(html).toContain("<h1>Title</h1>");
+    expect(html).toContain("<p>Body.</p>");
+    expect(html).not.toContain("</h1>\n<root");
+  });
+
+  // Option B unwraps only the document root. A raw return into an inline slot
+  // (text visitor) still carries the parser's wrapping paragraph — raw is
+  // block-level by design — but it must not produce a nested <root>/<p><p>.
+  test("raw return from an inline (text) visitor keeps a single paragraph wrapper", () => {
+    const decorate = defineMdastPlugin({
+      name: "decorate-text",
+      text() {
+        return { raw: "Lorem **ipsum** dolor." };
+      },
+    });
+
+    const { html } = markdownToHtml("placeholder", { mdastPlugins: [decorate] });
+    // The parser's paragraph survives inside the original paragraph; what must
+    // never appear is a literal nested document root.
+    expect(html).not.toContain("<root>");
+    expect(html).toContain("<strong>ipsum</strong>");
+  });
+
   // with HAST plugins only
 
   test("HAST plugin adds class to all elements", () => {

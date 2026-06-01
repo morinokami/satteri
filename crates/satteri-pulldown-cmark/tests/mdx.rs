@@ -3,6 +3,9 @@
 //! Tests are organized by construct: ESM, expression flow, expression text,
 //! JSX flow, JSX text. Edge cases from markdown-rs's mdx_*.rs test files are
 //! included.
+//!
+//! The whole file is MDX-only; it compiles out of the lite (non-mdx) build.
+#![cfg(feature = "mdx")]
 
 use satteri_pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 

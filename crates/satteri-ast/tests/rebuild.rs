@@ -63,6 +63,19 @@ fn single_node_arena(node_type: MdastNodeType) -> Arena<Mdast> {
     b.finish()
 }
 
+/// A `Root`-wrapped arena, mimicking what the parser produces for a raw
+/// markdown / HTML payload: `Root > [block, ...]`.
+fn root_wrapped_arena(blocks: &[MdastNodeType]) -> Arena<Mdast> {
+    let mut b = ArenaBuilder::<Mdast>::new(String::new());
+    b.open_node(MdastNodeType::Root as u8);
+    for &block in blocks {
+        b.open_node(block as u8);
+        b.close_node();
+    }
+    b.close_node();
+    b.finish()
+}
+
 /// Empty patches → same structure (all nodes preserved, just fresh IDs).
 #[test]
 fn empty_patches_preserves_all_nodes() {
@@ -1060,4 +1073,121 @@ fn hast_text_round_trip_with_source_base() {
     let text_id = first_hast_node_of(&rebuilt, HastNodeType::Text);
     let sr = decode_text_data(rebuilt.get_type_data(text_id));
     assert_eq!(rebuilt.get_str(sr), "Hello, world!");
+}
+
+/// Replacing a block (the paragraph) with a `Root`-wrapped tree — as a raw
+/// markdown return does — must splice the Root's child in, not the Root.
+/// Before the fix this produced `Root > Root > Paragraph`.
+#[test]
+fn replace_with_root_wrapped_tree_strips_root() {
+    let orig = build_hello_world();
+    let para_id = orig.get_children(0)[1];
+
+    let replacement = root_wrapped_arena(&[MdastNodeType::Paragraph]);
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: para_id,
+            new_tree: replacement,
+            keep_children: false,
+        }],
+    );
+
+    let root_children = rebuilt.get_children(0);
+    assert_eq!(root_children.len(), 2, "heading + spliced paragraph");
+    for &child in root_children {
+        assert_ne!(
+            rebuilt.get_node(child).node_type,
+            MdastNodeType::Root as u8,
+            "no nested Root may be spliced into the tree"
+        );
+    }
+    assert_eq!(
+        rebuilt.get_node(root_children[1]).node_type,
+        MdastNodeType::Paragraph as u8
+    );
+}
+
+/// Replacing an inline node (the text inside the heading) with a `Root`-wrapped
+/// tree. Option B strips only the Root, so the parser's wrapping Paragraph
+/// remains — a block in an inline slot — but no nested Root survives.
+#[test]
+fn replace_inline_with_root_wrapped_tree_strips_only_root() {
+    let orig = build_hello_world();
+    let heading_id = orig.get_children(0)[0];
+    let text_id = orig.get_children(heading_id)[0];
+
+    let replacement = root_wrapped_arena(&[MdastNodeType::Paragraph]);
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: text_id,
+            new_tree: replacement,
+            keep_children: false,
+        }],
+    );
+
+    let new_heading = rebuilt.get_children(0)[0];
+    let heading_children = rebuilt.get_children(new_heading);
+    assert_eq!(heading_children.len(), 1);
+    assert_eq!(
+        rebuilt.get_node(heading_children[0]).node_type,
+        MdastNodeType::Paragraph as u8,
+        "Root stripped, parser's Paragraph remains (block-level raw, by design)"
+    );
+}
+
+/// A raw return parsing to several top-level blocks splices them all as
+/// siblings into the slot.
+#[test]
+fn replace_with_multi_block_root_splices_all_siblings() {
+    let orig = build_hello_world();
+    let para_id = orig.get_children(0)[1];
+
+    let replacement =
+        root_wrapped_arena(&[MdastNodeType::Heading, MdastNodeType::ThematicBreak]);
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: para_id,
+            new_tree: replacement,
+            keep_children: false,
+        }],
+    );
+
+    let root_children = rebuilt.get_children(0);
+    assert_eq!(root_children.len(), 3, "original heading + 2 spliced blocks");
+    assert_eq!(
+        rebuilt.get_node(root_children[1]).node_type,
+        MdastNodeType::Heading as u8
+    );
+    assert_eq!(
+        rebuilt.get_node(root_children[2]).node_type,
+        MdastNodeType::ThematicBreak as u8
+    );
+}
+
+/// An empty raw return (`Root` with no children) removes the slot cleanly
+/// rather than leaving an empty Root behind.
+#[test]
+fn replace_with_empty_root_removes_slot() {
+    let orig = build_hello_world();
+    let para_id = orig.get_children(0)[1];
+
+    let replacement = root_wrapped_arena(&[]);
+    let rebuilt = rebuild(
+        &orig,
+        &[Patch::Replace {
+            node_id: para_id,
+            new_tree: replacement,
+            keep_children: false,
+        }],
+    );
+
+    let root_children = rebuilt.get_children(0);
+    assert_eq!(root_children.len(), 1, "only the heading remains");
+    assert_eq!(
+        rebuilt.get_node(root_children[0]).node_type,
+        MdastNodeType::Heading as u8
+    );
 }

@@ -341,6 +341,7 @@ pub fn decode_directive_attr(bytes: &[u8], index: u32) -> (StringRef, StringRef)
 ///   1 = LiteralProp (name="literal")
 ///   2 = ExpressionProp (name={expr})
 ///   3 = Spread ({...expr})
+#[cfg(feature = "mdx")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct MdxJsxElementData {
@@ -348,12 +349,14 @@ pub struct MdxJsxElementData {
 }
 
 /// Data for MdxFlowExpression, MdxTextExpression, MdxjsEsm.
+#[cfg(feature = "mdx")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
 pub struct ExpressionData {
     pub value: StringRef,
 }
 
+#[cfg(feature = "mdx")]
 impl ExpressionData {
     pub fn to_bytes(&self) -> [u8; 8] {
         self.value.as_bytes()
@@ -367,6 +370,7 @@ impl ExpressionData {
 }
 
 // MDX_ATTR_* constants are in crate::shared, re-export for backwards compat
+#[cfg(feature = "mdx")]
 pub use crate::shared::{
     MDX_ATTR_BOOLEAN_PROP, MDX_ATTR_EXPRESSION_PROP, MDX_ATTR_LITERAL_PROP, MDX_ATTR_SPREAD,
 };
@@ -514,6 +518,7 @@ pub fn encode_footnote_definition_data(identifier: StringRef, label: StringRef) 
         .to_vec()
 }
 
+#[cfg(feature = "mdx")]
 pub fn encode_mdx_jsx_element_data(
     name: StringRef,
     attrs: &[(u8, StringRef, StringRef)],
@@ -537,10 +542,12 @@ pub fn encode_mdx_jsx_element_data(
     out
 }
 
+#[cfg(feature = "mdx")]
 pub fn decode_mdx_jsx_element_name(bytes: &[u8]) -> StringRef {
     StringRef::from_bytes(bytes)
 }
 
+#[cfg(feature = "mdx")]
 pub fn decode_mdx_jsx_attr_count(bytes: &[u8]) -> u32 {
     assert!(bytes.len() >= 12);
     u32::from_le_bytes(bytes[8..12].try_into().unwrap())
@@ -548,10 +555,12 @@ pub fn decode_mdx_jsx_attr_count(bytes: &[u8]) -> u32 {
 
 /// Whether the JSX element was authored in MDX source (mirrors
 /// `_mdxExplicitJsx` in `node.data`). Defaults to `false` on short buffers.
+#[cfg(feature = "mdx")]
 pub fn decode_mdx_jsx_explicit(bytes: &[u8]) -> bool {
     bytes.get(12).is_some_and(|&b| b != 0)
 }
 
+#[cfg(feature = "mdx")]
 pub fn decode_mdx_jsx_attr(bytes: &[u8], index: u32) -> (u8, StringRef, StringRef) {
     let base = 16 + index as usize * 20;
     let kind = bytes[base];
@@ -560,10 +569,12 @@ pub fn decode_mdx_jsx_attr(bytes: &[u8], index: u32) -> (u8, StringRef, StringRe
     (kind, attr_name, attr_value)
 }
 
+#[cfg(feature = "mdx")]
 pub fn encode_expression_data(value: StringRef) -> Vec<u8> {
     ExpressionData { value }.to_bytes().to_vec()
 }
 
+#[cfg(feature = "mdx")]
 pub fn decode_expression_data(bytes: &[u8]) -> ExpressionData {
     ExpressionData::from_bytes(bytes)
 }

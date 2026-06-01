@@ -15,9 +15,12 @@
 //! reads / mutates `Arena<Mdast>` after building is finished. They live
 //! here so [`arena_build`] stays focused on actually building the arena.
 
-use satteri_arena::{decode_string_ref_data, Arena, ArenaBuilder, Mdast, StringRef};
+use satteri_arena::{Arena, ArenaBuilder, Mdast, StringRef};
+#[cfg(feature = "mdx")]
+use satteri_arena::decode_string_ref_data;
 use satteri_ast::mdast::{codec::LinkData, MdastNodeType};
 
+#[cfg(feature = "mdx")]
 pub(crate) const MDX_EXPLICIT_JSX_DATA: &[u8] = b"{\"_mdxExplicitJsx\":true}";
 
 /// Mirror `mdast-util-gfm-autolink-literal`'s `isCorrectDomain`. Domain must
@@ -1252,6 +1255,7 @@ fn split_text_on_backticks(arena: &mut Arena<Mdast>, text_id: u32) {
 /// `<Name>…</Name>` (or self-closing `<Name/>`) runs and emit
 /// `mdxJsxTextElement` children. Also splits on balanced `{…}` spans and
 /// emits `mdxTextExpression` nodes.
+#[cfg(feature = "mdx")]
 pub(crate) fn directive_label_jsx_pass(arena: &mut Arena<Mdast>) {
     let mut candidates: Vec<u32> = Vec::new();
     for id in 0..arena.len() as u32 {
@@ -1346,6 +1350,7 @@ pub(crate) fn directive_label_jsx_pass(arena: &mut Arena<Mdast>) {
 
 /// Split a `Text` node on `{…}` spans (balanced braces, JS-aware) and emit
 /// `mdxTextExpression` nodes for the matched spans.
+#[cfg(feature = "mdx")]
 fn split_text_on_mdx_expressions(arena: &mut Arena<Mdast>, text_id: u32) {
     use crate::mdx::scan_mdx_inline_expression;
     let data = arena.get_type_data(text_id);
@@ -1441,6 +1446,7 @@ fn split_text_on_mdx_expressions(arena: &mut Arena<Mdast>, text_id: u32) {
 /// matched open/close pair becomes a child `Text` node (no recursion — nested
 /// JSX inside a directive label is rare enough that a single-level split
 /// covers the conformance cases).
+#[cfg(feature = "mdx")]
 fn split_text_on_jsx_tags(arena: &mut Arena<Mdast>, text_id: u32) {
     use crate::mdx::{parse_jsx_tag, scan_mdx_inline_jsx};
     let data = arena.get_type_data(text_id);
@@ -1655,6 +1661,7 @@ fn split_text_on_jsx_tags(arena: &mut Arena<Mdast>, text_id: u32) {
     arena.replace_node_with_children(text_id, &new_children);
 }
 
+#[cfg(feature = "mdx")]
 pub(crate) fn mdx_mark_and_unravel(arena: &mut Arena<Mdast>) {
     let len = arena.len() as u32;
     // Only paragraphs containing inline MDX nodes can be promoted; without
