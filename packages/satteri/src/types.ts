@@ -1,16 +1,11 @@
 import type { Position } from "unist";
-<<<<<<< fix-superscript-subscript
 import type {
   Literal as MdastLiteral,
   Nodes as MdastStdNodes,
   Parent as MdastParent,
   PhrasingContent,
 } from "mdast";
-import type { Nodes as HastStdNodes } from "hast";
-=======
-import type { Literal as MdastLiteral, Nodes as MdastStdNodes } from "mdast";
 import type { Literal as HastLiteral, Nodes as HastStdNodes } from "hast";
->>>>>>> main
 
 // Re-export standard position types from unist.
 export type { Position, Point } from "unist";
