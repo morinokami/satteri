@@ -67,6 +67,8 @@ import type {
   Text,
   ThematicBreak,
   Yaml,
+  Parents as MdastParents,
+  Root as MdastRoot,
 } from "mdast";
 import type { MdxJsxFlowElement, MdxJsxTextElement } from "../mdx-types.js";
 import type { MdxFlowExpression, MdxTextExpression } from "../mdx-types.js";
@@ -108,6 +110,10 @@ export class MdastVisitorContext {
   readonly #diagnostics: MdastDiagnostic[] = [];
   readonly #handle: MdastHandle;
   readonly #getSource: () => string;
+  readonly #resolver: LazyChildResolver<MdastReader, MdastNode>;
+  /** One canonical object per parent id, so visitors can dedupe by identity.
+   *  Null until the first `parent()` call; most passes never make one. */
+  #parentsById: Map<number, MdastNode> | null = null;
   /**
    * The URL of the document being processed (the compile `fileURL` option),
    * or `undefined` when none was given. Use `fileURLToPath(ctx.fileURL)` for a
@@ -115,10 +121,16 @@ export class MdastVisitorContext {
    */
   readonly fileURL: URL | undefined;
 
-  constructor(handle: MdastHandle, getSource: () => string, fileURL: URL | undefined) {
+  constructor(
+    handle: MdastHandle,
+    getSource: () => string,
+    fileURL: URL | undefined,
+    resolver: LazyChildResolver<MdastReader, MdastNode>,
+  ) {
     this.#handle = handle;
     this.#getSource = getSource;
     this.fileURL = fileURL;
+    this.#resolver = resolver;
   }
 
   get source(): string {
@@ -191,7 +203,11 @@ export class MdastVisitorContext {
     node: Readonly<N>,
     key: K,
     value: N[K],
-  ): void {
+  ): void;
+  /** `children` is structural and every parent accepts it, so the key also
+   *  works on node-type unions (e.g. a node returned by `parent()`). */
+  setProperty(node: Readonly<MdastNode>, key: "children", value: readonly MdastNode[]): void;
+  setProperty(node: Readonly<MdastNode>, key: string, value: unknown): void {
     if (key === "children") {
       // children is structural: set-children keeps the node and swaps only its
       // child list (reused children keep their id).
@@ -223,6 +239,33 @@ export class MdastVisitorContext {
       requireNid(node as MdastNode, "textContent"),
       options,
     );
+  }
+
+  /**
+   * The parent of a node, or `undefined` at the root. Within a pass the same
+   * parent is always the same object, so visitors on sibling nodes can dedupe
+   * by identity.
+   */
+  parent<N extends Exclude<MdastNode, MdastRoot>>(node: Readonly<N>): Readonly<MdastParents>;
+  parent(node: Readonly<MdastNode>): Readonly<MdastParents> | undefined;
+  parent(node: Readonly<MdastNode>): Readonly<MdastParents> | undefined {
+    const parentId = this.#resolver.parentIdOf(requireNid(node as MdastNode, "parent"));
+    if (parentId === undefined) return undefined;
+    const byId = (this.#parentsById ??= new Map());
+    let parent = byId.get(parentId);
+    if (parent === undefined) {
+      parent = this.#resolver.materializeOne(parentId);
+      byId.set(parentId, parent);
+    }
+    return parent as MdastParents;
+  }
+
+  /**
+   * Index of `node` within its parent's children, or `undefined` at the root.
+   * Use this rather than `parent.children.indexOf(node)`, which won't find it.
+   */
+  indexOf(node: Readonly<MdastNode>): number | undefined {
+    return this.#resolver.indexInParent(requireNid(node as MdastNode, "indexOf"));
   }
 
   report({
@@ -343,6 +386,14 @@ class MdastLazyChildResolver extends LazyChildResolver<MdastReader, MdastNode> {
 
   protected override materializeNode(reader: MdastReader, nodeId: number): MdastNode {
     return materializeNode(reader, nodeId);
+  }
+
+  protected override readParentId(reader: MdastReader, nodeId: number): number {
+    return reader.getParentId(nodeId);
+  }
+
+  protected override readChildIds(reader: MdastReader, nodeId: number): number[] {
+    return reader.getChildIds(nodeId);
   }
 }
 
@@ -701,9 +752,9 @@ export function visitMdastHandle(
   fileURL: URL | undefined,
 ): MdastVisitResult | Promise<MdastVisitResult> {
   const getSource = typeof source === "function" ? source : () => source;
-  const context = new MdastVisitorContext(handle, getSource, fileURL);
-  const returnBuffer = new CommandBuffer();
   const resolver = new MdastLazyChildResolver(handle);
+  const context = new MdastVisitorContext(handle, getSource, fileURL, resolver);
+  const returnBuffer = new CommandBuffer();
   const rustSubs = subs.map((s) => ({ nodeType: s.nodeType, tagFilter: [] as string[] }));
   const matchBuf: Uint8Array = walkMdastHandle(handle, rustSubs);
   const matchView = new DataView(matchBuf.buffer, matchBuf.byteOffset, matchBuf.byteLength);

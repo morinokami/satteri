@@ -218,10 +218,12 @@ For HAST elements, `setProperty` takes a HAST property key (e.g.
 
 ### Inspection
 
-| Method                                | Effect                                                                                                                             |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `textContent(node, options?)` (MDAST) | Concatenated text of the subtree. Options: `{ includeImageAlt?: boolean, includeHtml?: boolean }`. Mirrors `mdast-util-to-string`. |
-| `textContent(node)` (HAST)            | Concatenated text of the subtree. Mirrors DOM `textContent`.                                                                       |
+| Method                                | Effect                                                                                             |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `textContent(node, options?)` (MDAST) | Concatenated text of the subtree. Options: `{ includeImageAlt?: boolean, includeHtml?: boolean }`. |
+| `textContent(node)` (HAST)            | Concatenated text of the subtree. Mirrors DOM `textContent`.                                       |
+| `parent(node)`                        | The node's parent, or `undefined` at the root.                                                     |
+| `indexOf(node)`                       | Index of the node in its parent's children, or `undefined` at the root.                            |
 
 ### Diagnostics
 
@@ -235,13 +237,13 @@ returned with the compile result.
 
 ## Return value semantics
 
-| Returned                      | MDAST                            | HAST          |
-| ----------------------------- | -------------------------------- | ------------- |
-| `undefined` / `null` / `void` | Keep node, apply `ctx` mutations | Same          |
-| The same node object          | Same (no-op replace)             | Same          |
-| A different node              | Replace the visited node         | Replace       |
-| `{ raw: string }`             | Splice raw Markdown (re-parsed)  | Not supported |
-| `{ rawHtml: string }`         | Splice raw HTML (passthrough)    | Not supported |
+| Returned                      | MDAST                            | HAST    |
+| ----------------------------- | -------------------------------- | ------- |
+| `undefined` / `null` / `void` | Keep node, apply `ctx` mutations | Same    |
+| The same node object          | Same (no-op replace)             | Same    |
+| A different node              | Replace the visited node         | Replace |
+| `{ raw: string }`             | Splice raw Markdown (re-parsed)  | N/A     |
+| `{ rawHtml: string }`         | Splice raw HTML (passthrough)    | N/A     |
 
 ## Async plugins
 
